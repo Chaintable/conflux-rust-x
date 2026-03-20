@@ -50,3 +50,7 @@ cfx-rpc-common-impl = { workspace = true }
 cfx-tasks = { workspace = true }
 cfx-parity-trace-types = { workspace = true }
 cfxcore-errors = { workspace = true }
+hex = { workspace = true }
+alloy-primitives = { workspace = true }
+rlp = { workspace = true }
+revm-interpreter = { workspace = true }

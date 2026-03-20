@@ -1365,6 +1365,7 @@ dependencies = [
 name = "cfx-rpc"
 version = "3.0.1"
 dependencies = [
+ "alloy-primitives",
  "alloy-rpc-types-trace",
  "async-trait",
  "cfx-addr",
@@ -1388,12 +1389,15 @@ dependencies = [
  "cfxcore-errors",
  "futures 0.3.30",
  "geth-tracer",
+ "hex",
  "jsonrpc-core",
  "jsonrpsee",
  "keccak-hash",
  "log",
  "parking_lot 0.12.1",
  "primitives",
+ "revm-interpreter",
+ "rlp 0.4.6",
  "rustc-hex",
  "serde",
  "serde_json",
@@ -1507,12 +1511,17 @@ dependencies = [
  "cfx-types",
  "cfx-util-macros",
  "cfx-vm-types",
+ "hex",
  "jsonrpc-core",
  "jsonrpsee",
+ "md-5",
+ "num-bigint 0.2.6",
  "primitives",
  "rlp 0.4.6",
+ "rlp-derive",
  "serde",
  "serde_json",
+ "sha1",
  "similar-asserts",
  "thiserror 2.0.11",
 ]
@@ -5471,6 +5480,16 @@ name = "maybe-uninit"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if 1.0.0",
+ "digest 0.10.7",
+]
 
 [[package]]
 name = "memchr"

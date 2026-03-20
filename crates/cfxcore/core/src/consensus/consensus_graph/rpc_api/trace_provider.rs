@@ -760,6 +760,57 @@ impl ConsensusGraph {
         )
     }
 
+    pub fn collect_epoch_debank_trace(
+        &self, epoch_num: u64,
+    ) -> CoreResult<(
+        Vec<
+            crate::consensus::consensus_inner::consensus_executor::epoch_execution::DebankTxRawTrace,
+        >,
+        cfx_executor::state::debank_diff::DebankStateDiff,
+    )> {
+        let epoch = EpochNumber::Number(epoch_num);
+        self.validate_stated_epoch(&epoch)?;
+
+        let epoch_block_hashes = if let Ok(v) =
+            self.get_block_hashes_by_epoch(epoch)
+        {
+            v
+        } else {
+            bail!("cannot get block hashes in the specified epoch, maybe it does not exist?");
+        };
+
+        let blocks = match self.data_man.blocks_by_hash_list(
+            &epoch_block_hashes,
+            true, /* update_cache */
+        ) {
+            Some(b) => b,
+            None => {
+                bail!("blocks not found or pruned for the specified epoch");
+            }
+        };
+
+        let pivot_block = match blocks.last() {
+            Some(b) => b,
+            None => {
+                bail!("empty epoch");
+            }
+        };
+
+        let height = pivot_block.block_header.height();
+        if height == 0 {
+            bail!("cannot collect debank traces for genesis block");
+        }
+
+        let parent_pivot_block_hash = pivot_block.block_header.parent_hash();
+        let parent_epoch_num = height - 1;
+
+        self.executor.collect_blocks_debank_trace(
+            *parent_pivot_block_hash,
+            parent_epoch_num,
+            &blocks,
+        )
+    }
+
     fn earliest_epoch_for_log_filter(&self) -> u64 {
         max(
             self.data_man.earliest_epoch_with_block_body(),

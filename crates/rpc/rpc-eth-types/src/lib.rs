@@ -3,6 +3,7 @@ mod authorization;
 mod block;
 mod block_number;
 mod call;
+pub mod debank;
 mod errors;
 pub mod eth_pubsub;
 mod fee_history;

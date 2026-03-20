@@ -29,6 +29,9 @@ mod global_statistics;
 
 mod warm;
 
+/// Debank state diff extraction
+pub mod debank_diff;
+
 /// Implements functions for the PoS rewarding of `State`.
 mod pos;
 

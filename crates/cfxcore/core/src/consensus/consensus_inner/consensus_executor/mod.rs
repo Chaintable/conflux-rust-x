@@ -2,7 +2,7 @@
 // Conflux is free software and distributed under GNU General Public License.
 // See http://www.gnu.org/licenses/
 
-mod epoch_execution;
+pub mod epoch_execution;
 
 use core::convert::TryFrom;
 use std::{
@@ -660,6 +660,16 @@ impl ConsensusExecutor {
         self.handler.collect_blocks_geth_trace(
             epoch_id, epoch_num, blocks, opts, tx_hash,
         )
+    }
+
+    pub fn collect_blocks_debank_trace(
+        &self, epoch_id: H256, epoch_num: u64, blocks: &Vec<Arc<Block>>,
+    ) -> CoreResult<(
+        Vec<epoch_execution::DebankTxRawTrace>,
+        cfx_executor::state::debank_diff::DebankStateDiff,
+    )> {
+        self.handler
+            .collect_blocks_debank_trace(epoch_id, epoch_num, blocks)
     }
 
     pub fn stop(&self) {
@@ -1725,6 +1735,46 @@ impl ConsensusExecutionHandler {
         )?;
 
         Ok(answer)
+    }
+
+    /// Execute transactions in the blocks to collect debank raw traces and
+    /// state diff.
+    pub fn collect_blocks_debank_trace(
+        &self, epoch_id: H256, epoch_num: u64, blocks: &Vec<Arc<Block>>,
+    ) -> CoreResult<(
+        Vec<epoch_execution::DebankTxRawTrace>,
+        cfx_executor::state::debank_diff::DebankStateDiff,
+    )> {
+        let state_space = None;
+        let mut state = self.get_state_by_epoch_id_and_space(
+            &epoch_id,
+            epoch_num,
+            state_space,
+        )?;
+
+        let start_block_number = self
+            .data_man
+            .get_epoch_execution_context(&epoch_id)
+            .map(|v| v.start_block_number)
+            .expect("should exist");
+
+        let mut answer = vec![];
+        let virtual_call =
+            VirtualCall::DebankTrace(epoch_execution::DebankTask {
+                answer: &mut answer,
+            });
+        self.process_epoch_transactions(
+            &mut state,
+            blocks,
+            start_block_number,
+            false,
+            Some(virtual_call),
+        )?;
+
+        // Extract state diff from the modified state
+        let state_diff = state.extract_debank_state_diff();
+
+        Ok((answer, state_diff))
     }
 
     fn get_state_by_epoch_id_and_space(

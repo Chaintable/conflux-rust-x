@@ -1,5 +1,6 @@
 use cfx_rpc_eth_types::{
-    BlockNumber, Index, LocalizedSetAuthTrace, LocalizedTrace, TraceFilter,
+    debank::DebankOutPut, BlockNumber, Index, LocalizedSetAuthTrace,
+    LocalizedTrace, TraceFilter,
 };
 use cfx_types::H256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
@@ -34,4 +35,10 @@ pub trait TraceApi {
     async fn transaction_traces(
         &self, tx_hash: H256,
     ) -> RpcResult<Option<Vec<LocalizedTrace>>>;
+
+    /// Returns debank's trace information for a given block.
+    #[method(name = "debankBlock")]
+    async fn trace_debank_block(
+        &self, block_number: BlockNumber,
+    ) -> RpcResult<Option<DebankOutPut>>;
 }

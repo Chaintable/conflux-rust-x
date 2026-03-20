@@ -3,7 +3,9 @@ use std::{collections::BTreeSet, convert::From, sync::Arc};
 
 use alloy_rpc_types_trace::geth::GethDebugTracingOptions;
 use cfx_parameters::genesis::GENESIS_ACCOUNT_ADDRESS;
-use geth_tracer::{GethTraceWithHash, GethTracer, TxExecContext};
+use geth_tracer::{
+    CallTraceArena, GethTraceWithHash, GethTracer, TxExecContext,
+};
 use pow_types::StakingEvent;
 
 use cfx_statedb::{Error as DbErrorKind, Result as DbResult};
@@ -36,12 +38,25 @@ use cfx_vm_types::Env;
 
 pub enum VirtualCall<'a> {
     GethTrace(GethTask<'a>),
+    DebankTrace(DebankTask<'a>),
 }
 
 pub struct GethTask<'a> {
     pub(super) tx_hash: Option<H256>,
     pub(super) opts: GethDebugTracingOptions,
     pub(super) answer: &'a mut Vec<GethTraceWithHash>,
+}
+
+/// Raw trace data for a single transaction (for debank).
+pub struct DebankTxRawTrace {
+    pub tx_hash: H256,
+    pub arena: CallTraceArena,
+    pub gas_used: u64,
+    pub space: Space,
+}
+
+pub struct DebankTask<'a> {
+    pub(super) answer: &'a mut Vec<DebankTxRawTrace>,
 }
 
 impl ConsensusExecutionHandler {
@@ -93,8 +108,17 @@ impl ConsensusExecutionHandler {
             )?;
         }
 
-        if let Some(VirtualCall::GethTrace(task)) = context.virtual_call {
-            std::mem::swap(&mut epoch_recorder.geth_traces, task.answer);
+        match context.virtual_call {
+            Some(VirtualCall::GethTrace(task)) => {
+                std::mem::swap(&mut epoch_recorder.geth_traces, task.answer);
+            }
+            Some(VirtualCall::DebankTrace(task)) => {
+                std::mem::swap(
+                    &mut epoch_recorder.debank_raw_traces,
+                    task.answer,
+                );
+            }
+            None => {}
         }
 
         if !dry_run && self.pos_verifier.pos_option().is_some() {
@@ -374,21 +398,51 @@ impl ConsensusExecutionHandler {
             Observer::with_no_tracing()
         };
 
-        if let Some(VirtualCall::GethTrace(ref task)) =
-            block_context.epoch_context.virtual_call
-        {
-            let need_trace =
-                task.tx_hash.map_or(true, |hash| transaction.hash() == hash);
-            let support_tracer = matches!(
-                task.opts.tracer,
-                Some(BuiltInTracer(
-                    FourByteTracer | CallTracer | PreStateTracer | NoopTracer
-                )) | None
-            );
-            let tx_gas_limit = transaction.gas_limit().as_u64();
+        match &block_context.epoch_context.virtual_call {
+            Some(VirtualCall::GethTrace(ref task)) => {
+                let need_trace = task
+                    .tx_hash
+                    .map_or(true, |hash| transaction.hash() == hash);
+                let support_tracer = matches!(
+                    task.opts.tracer,
+                    Some(BuiltInTracer(
+                        FourByteTracer
+                            | CallTracer
+                            | PreStateTracer
+                            | NoopTracer
+                    )) | None
+                );
+                let tx_gas_limit = transaction.gas_limit().as_u64();
 
-            if need_trace && support_tracer {
-                observer.geth_tracer = Some(GethTracer::new(
+                if need_trace && support_tracer {
+                    observer.geth_tracer = Some(GethTracer::new(
+                        TxExecContext {
+                            tx_gas_limit,
+                            block_height: block_context
+                                .epoch_context
+                                .pivot_block
+                                .block_header
+                                .height(),
+                            block_number: block_context.block_number,
+                        },
+                        Arc::clone(&self.machine),
+                        task.opts.clone(),
+                    ))
+                }
+            }
+            Some(VirtualCall::DebankTrace(_)) => {
+                let tx_gas_limit = transaction.gas_limit().as_u64();
+                // Create a GethTracer in debank mode: records logs, steps
+                // (for SSTORE detection), and excludes nothing.
+                let debank_opts = GethDebugTracingOptions {
+                    tracer: Some(BuiltInTracer(CallTracer)),
+                    tracer_config: alloy_rpc_types_trace::geth::GethDebugTracerConfig(
+                        serde_json::json!({"withLog": true}),
+                    ),
+                    config: Default::default(),
+                    timeout: None,
+                };
+                let mut tracer = GethTracer::new(
                     TxExecContext {
                         tx_gas_limit,
                         block_height: block_context
@@ -399,9 +453,12 @@ impl ConsensusExecutionHandler {
                         block_number: block_context.block_number,
                     },
                     Arc::clone(&self.machine),
-                    task.opts.clone(),
-                ))
+                    debank_opts,
+                );
+                tracer.debank_mode = true;
+                observer.geth_tracer = Some(tracer);
             }
+            None => {}
         }
         observer
     }
@@ -532,6 +589,7 @@ struct EpochProcessRecorder {
     staking_events: Vec<StakingEvent>,
     repack_tx: Vec<Arc<SignedTransaction>>,
     geth_traces: Vec<GethTraceWithHash>,
+    debank_raw_traces: Vec<DebankTxRawTrace>,
 
     evm_tx_idx: usize,
 }
@@ -545,6 +603,7 @@ struct BlockProcessRecorder {
     tx_error_msg: Vec<String>,
     traces: Vec<TransactionExecTraces>,
     geth_traces: Vec<GethTraceWithHash>,
+    debank_raw_traces: Vec<DebankTxRawTrace>,
     repack_tx: Vec<Arc<SignedTransaction>>,
     staking_events: Vec<StakingEvent>,
 
@@ -560,6 +619,7 @@ impl BlockProcessRecorder {
             tx_error_msg: vec![],
             traces: vec![],
             geth_traces: vec![],
+            debank_raw_traces: vec![],
             repack_tx: vec![],
             staking_events: vec![],
             tx_idx,
@@ -594,6 +654,15 @@ impl BlockProcessRecorder {
             self.geth_traces.push(GethTraceWithHash {
                 trace,
                 tx_hash: tx.hash(),
+                space: tx.space(),
+            });
+        }
+
+        if let Some(raw_trace) = r.debank_raw_trace {
+            self.debank_raw_traces.push(DebankTxRawTrace {
+                tx_hash: tx.hash(),
+                arena: raw_trace.arena,
+                gas_used: raw_trace.gas_used,
                 space: tx.space(),
             });
         }
@@ -641,6 +710,9 @@ impl BlockProcessRecorder {
         epoch_recorder.staking_events.extend(self.staking_events);
         epoch_recorder.repack_tx.extend(self.repack_tx);
         epoch_recorder.geth_traces.extend(self.geth_traces);
+        epoch_recorder
+            .debank_raw_traces
+            .extend(self.debank_raw_traces);
 
         epoch_recorder.evm_tx_idx = self.tx_idx[Space::Ethereum];
 

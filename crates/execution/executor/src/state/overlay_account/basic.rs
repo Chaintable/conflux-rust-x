@@ -99,4 +99,15 @@ impl OverlayAccount {
             && self.nonce.is_zero()
             && self.code_hash == KECCAK_EMPTY
     }
+
+    /// Returns a reference to the storage write cache.
+    pub fn storage_write_cache(
+        &self,
+    ) -> &Arc<
+        parking_lot::RwLock<
+            std::collections::HashMap<Vec<u8>, primitives::storage::WriteCacheItem>,
+        >,
+    > {
+        &self.storage_write_cache
+    }
 }
