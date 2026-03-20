@@ -22,7 +22,6 @@ cfx-rpc-cfx-impl = { workspace = true }
 async-trait = { workspace = true }
 keccak-hash = { workspace = true }
 alloy-rpc-types-trace = { workspace = true }
-alloy-primitives = { workspace = true }
 cfxcore = { workspace = true }
 primitives = { workspace = true }
 geth-tracer = { workspace = true }
@@ -47,3 +46,7 @@ cfx-rpc-common-impl = { workspace = true }
 cfx-tasks = { workspace = true }
 cfx-parity-trace-types = { workspace = true }
 cfxcore-errors = { workspace = true }
+hex = { workspace = true }
+alloy-primitives = { workspace = true }
+rlp = { workspace = true }
+revm-interpreter = { workspace = true }

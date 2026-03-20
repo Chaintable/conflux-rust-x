@@ -2002,11 +2002,14 @@ dependencies = [
  "cfxcore-errors",
  "futures 0.3.30",
  "geth-tracer",
+ "hex",
  "jsonrpsee",
  "keccak-hash",
  "log",
  "parking_lot 0.12.1",
  "primitives",
+ "revm-interpreter",
+ "rlp 0.6.1",
  "rustc-hex",
  "solidity-abi",
  "tokio",
@@ -2029,12 +2032,17 @@ dependencies = [
  "cfx-types",
  "cfx-util-macros",
  "cfx-vm-types",
+ "hex",
  "jsonrpsee",
+ "md-5",
+ "num-bigint 0.2.6",
  "primitives",
  "rlp 0.6.1",
+ "rlp-derive",
  "serde",
  "serde_json",
  "serde_with",
+ "sha1",
  "similar-asserts",
  "thiserror 2.0.18",
 ]
@@ -2675,7 +2683,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3785,7 +3793,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5746,6 +5754,16 @@ name = "maybe-uninit"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if 1.0.0",
+ "digest 0.10.7",
+]
 
 [[package]]
 name = "memchr"
@@ -7782,7 +7800,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7795,7 +7813,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.9.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7852,7 +7870,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8916,7 +8934,7 @@ dependencies = [
  "getrandom 0.3.2",
  "once_cell",
  "rustix 1.0.8",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9394,7 +9412,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "319c70195101a93f56db4c74733e272d720768e13471f400c78406a326b172b0"
 dependencies = [
  "cc",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]

@@ -37,7 +37,7 @@ use super::types::{CallTrace, CallTraceNode, LogCallOrder};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CallTraceArena {
     /// The arena of recorded trace nodes
-    pub(crate) arena: Vec<CallTraceNode>,
+    pub arena: Vec<CallTraceNode>,
 }
 
 impl CallTraceArena {

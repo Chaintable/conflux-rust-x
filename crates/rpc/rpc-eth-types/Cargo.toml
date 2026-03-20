@@ -21,6 +21,7 @@ cfx-bytes = { workspace = true }
 thiserror = { workspace = true }
 primitives = { workspace = true }
 rlp = { workspace = true }
+rlp_derive = { workspace = true }
 cfx-parameters = { workspace = true }
 alloy-rpc-types = { workspace = true }
 alloy-rpc-types-trace = { workspace = true }
@@ -32,6 +33,10 @@ similar-asserts = { workspace = true }
 cfx-util-macros = { workspace = true }
 cfx-vm-types = { workspace = true }
 cfx-rpc-utils = { workspace = true }
+md-5 = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }
+num-bigint = { workspace = true }
 
 [features]
 default = ["serde"]

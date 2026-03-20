@@ -4,6 +4,7 @@ mod block;
 mod block_number;
 mod block_properties;
 mod call;
+pub mod debank;
 mod errors;
 pub mod eth_pubsub;
 mod fee_history;

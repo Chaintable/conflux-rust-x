@@ -307,6 +307,8 @@ snmalloc-rs = { version = "0.3.7", features = ["build_cc"] }
 #fixed-hash = "0.5"
 keccak-hash = "0.12"
 tiny-keccak = "2.0"
+md-5 = "0.10"
+sha1 = "0.10"
 bls-signatures = { git = "https://github.com/Conflux-Chain/bls-signatures.git", rev = "fb52187df92d27c365642cb7e7b2aaf60437cf9c", default-features = false, features = [
     "multicore",
     "blst",
