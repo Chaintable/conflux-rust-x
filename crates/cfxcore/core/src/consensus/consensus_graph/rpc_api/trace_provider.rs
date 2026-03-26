@@ -769,7 +769,10 @@ impl ConsensusGraph {
         cfx_executor::state::debank_diff::DebankStateDiff,
     )> {
         let epoch = EpochNumber::Number(epoch_num);
-        self.validate_stated_epoch(&epoch)?;
+        // Skip validate_stated_epoch: it relies on
+        // best_executed_state_epoch_number which may return 0 on
+        // snapshot-synced nodes.  The actual state availability is
+        // checked later inside get_state_by_epoch_id_and_space.
 
         let epoch_block_hashes = if let Ok(v) =
             self.get_block_hashes_by_epoch(epoch)
