@@ -292,6 +292,19 @@ impl TraceApi {
                 .collect_epoch_debank_trace(block_height)
             {
                 Ok((raw_traces, state_diff)) => {
+                    warn!(
+                        "collect_epoch_debank_trace OK for block {}: raw_traces.len={}, phantom_txs.len={}, phantom_traces.len={}",
+                        block_height, raw_traces.len(),
+                        phantom_block.transactions.len(),
+                        phantom_block.traces.len(),
+                    );
+                    for (i, raw) in raw_traces.iter().enumerate() {
+                        warn!(
+                            "  raw_trace[{}]: tx_hash={:?}, space={:?}, arena.len={}",
+                            i, raw.tx_hash, raw.space, raw.arena.arena.len()
+                        );
+                    }
+
                     // Build set of addresses with storage changes
                     // from state diff (for storage_change flags)
                     let storage_change_addrs: std::collections::HashSet<
@@ -311,6 +324,10 @@ impl TraceApi {
                             arena_map.insert(raw.tx_hash, &raw.arena);
                         }
                     }
+                    warn!(
+                        "arena_map.len={} (after filtering eSpace only)",
+                        arena_map.len()
+                    );
 
                     let mut global_log_index: i64 = 0;
 
@@ -323,6 +340,10 @@ impl TraceApi {
                         let tx_id = debank::format_hash(&tx_hash);
 
                         if let Some(arena) = arena_map.get(&tx_hash) {
+                            warn!(
+                                "  tx[{}] {:?}: matched arena (arena.len={})",
+                                idx, tx_hash, arena.arena.len()
+                            );
                             // Pure eSpace TX: use full CallTraceArena
                             let (
                                 traces,
@@ -336,12 +357,21 @@ impl TraceApi {
                                 &mut global_log_index,
                                 &storage_change_addrs,
                             );
+                            warn!(
+                                "    traces={}, err_traces={}, events={}, err_events={}",
+                                traces.len(), err_traces.len(),
+                                events.len(), err_events.len()
+                            );
                             all_traces.extend(traces);
                             all_error_traces.extend(err_traces);
                             all_events.extend(events);
                             all_error_events.extend(err_events);
                             storage_contracts.extend(contracts);
                         } else if idx < phantom_block.traces.len() {
+                            warn!(
+                                "  tx[{}] {:?}: using parity traces (not in arena_map)",
+                                idx, tx_hash
+                            );
                             // Phantom TX: convert parity traces
                             let parity_traces = &phantom_block.traces[idx];
                             let (traces, err_traces, events, err_events) =
@@ -354,6 +384,11 @@ impl TraceApi {
                             all_error_traces.extend(err_traces);
                             all_events.extend(events);
                             all_error_events.extend(err_events);
+                        } else {
+                            warn!(
+                                "  tx[{}] {:?}: NO trace source (not in arena_map, idx >= phantom_traces.len={})",
+                                idx, tx_hash, phantom_block.traces.len()
+                            );
                         }
                     }
                     raw_state_diff = Some(state_diff);
