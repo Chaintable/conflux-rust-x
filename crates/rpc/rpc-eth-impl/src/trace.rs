@@ -359,10 +359,7 @@ impl TraceApi {
                     raw_state_diff = Some(state_diff);
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to collect debank traces for block {}: {:?}",
-                        block_height, e
-                    );
+                    return Err(e);
                 }
             }
         }
