@@ -92,6 +92,10 @@ impl<K: Eq + Hash, V: MallocSizeOf> MemoryLruCache<K, V> {
 mod tests {
     use super::*;
 
+    #[global_allocator]
+    static ALLOC: cfx_mallocator_utils::allocator::Allocator =
+        cfx_mallocator_utils::allocator::new_allocator();
+
     #[test]
     fn it_works() {
         let mut cache = MemoryLruCache::new(256);

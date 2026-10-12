@@ -16,10 +16,10 @@
 
 //! Trace filter deserialization.
 
-use crate::BlockNumber;
+use crate::BlockId;
 use cfx_parity_trace_types::TraceFilter as PrimitiveTraceFilter;
 use cfx_types::{Space, H160};
-use jsonrpc_core::Error as RpcError;
+use jsonrpsee::types::ErrorObjectOwned;
 use primitives::EpochNumber;
 use serde::Deserialize;
 use std::convert::TryInto;
@@ -30,9 +30,9 @@ use std::convert::TryInto;
 #[serde(rename_all = "camelCase")]
 pub struct TraceFilter {
     /// From block
-    pub from_block: Option<BlockNumber>,
+    pub from_block: Option<BlockId>,
     /// To block
-    pub to_block: Option<BlockNumber>,
+    pub to_block: Option<BlockId>,
     /// From address
     pub from_address: Option<Vec<H160>>,
     /// To address
@@ -44,7 +44,9 @@ pub struct TraceFilter {
 }
 
 impl TraceFilter {
-    pub fn into_primitive(self) -> Result<PrimitiveTraceFilter, RpcError> {
+    pub fn into_primitive(
+        self,
+    ) -> Result<PrimitiveTraceFilter, ErrorObjectOwned> {
         let from_epoch = match self.from_block {
             // FIXME(thegaram): this is probably not consistent with eth
             // FIXME(lpl): Support BlockHash?

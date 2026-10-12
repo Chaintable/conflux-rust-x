@@ -26,7 +26,7 @@
 
 use crate::{BlockGenerator, SolutionReceiver};
 
-use super::MineWorker;
+use super::{has_zero_high_nonce, MineWorker};
 use cfx_stratum::{
     Error as StratumServiceError, JobDispatcher, PushWorkHandler,
     Stratum as StratumService,
@@ -53,13 +53,7 @@ pub struct Options {
     pub secret: Option<H256>,
 }
 
-fn clean_0x(s: &str) -> &str {
-    if s.starts_with("0x") {
-        &s[2..]
-    } else {
-        s
-    }
-}
+fn clean_0x(s: &str) -> &str { s.strip_prefix("0x").unwrap_or(s) }
 
 struct SubmitPayload {
     worker_id: String,
@@ -137,6 +131,12 @@ impl JobDispatcher for StratumJobDispatcher {
         let sol = ProofOfWorkSolution {
             nonce: payload.nonce,
         };
+        if !has_zero_high_nonce(&sol) {
+            return Err(StratumServiceError::InvalidSolution(format!(
+                "Nonce high 128 bits must be zero! worker_id = {}!",
+                payload.worker_id
+            )));
+        }
         {
             let mut probs = self.recent_problems.lock();
             let mut found = false;
@@ -147,7 +147,7 @@ impl JobDispatcher for StratumJobDispatcher {
                             format!(
                                 "Problem already solved with nonce = {}! worker_id = {}",
                                 sol.nonce, payload.worker_id
-                            ).into(),
+                            ),
                         ));
                     } else if self.pow.validate(pow_prob, &sol) {
                         solved_nonce.insert(sol.nonce);
@@ -161,20 +161,16 @@ impl JobDispatcher for StratumJobDispatcher {
                             format!(
                                 "Incorrect Nonce! worker_id = {}!",
                                 payload.worker_id
-                            )
-                            .into(),
+                            ),
                         ));
                     }
                 }
             }
             if !found {
-                return Err(StratumServiceError::InvalidSolution(
-                    format!(
-                        "Solution for a stale job! worker_id = {}",
-                        payload.worker_id
-                    )
-                    .into(),
-                ));
+                return Err(StratumServiceError::InvalidSolution(format!(
+                    "Solution for a stale job! worker_id = {}",
+                    payload.worker_id
+                )));
             }
 
             match self.solution_sender.lock().send(sol) {
@@ -208,7 +204,7 @@ impl StratumJobDispatcher {
         if probs.len() == self.window_size {
             probs.remove(0);
         }
-        probs.push((current_problem.clone(), HashSet::new()));
+        probs.push((*current_problem, HashSet::new()));
     }
 
     /// Serializes payload for stratum service
@@ -303,12 +299,43 @@ impl Stratum {
                 options.port,
             ),
             dispatcher.clone(),
-            options.secret.clone(),
+            options.secret,
         )?;
 
         Ok(Stratum {
             dispatcher,
             service: stratum_svc,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submit_rejects_nonzero_high_nonce_before_pow_validation() {
+        let (solution_sender, solution_receiver) = mpsc::channel();
+        let dispatcher = StratumJobDispatcher::new(
+            solution_sender,
+            Arc::new(PowComputer::new(false)),
+            1,
+        );
+        let high_nonce = U256::one() << 128;
+        let payload = vec![
+            "worker".into(),
+            String::new(),
+            format!("0x{:x}", high_nonce),
+            format!("0x{:x}", H256::zero()),
+        ];
+
+        let error = dispatcher.submit(payload).unwrap_err();
+        match error {
+            StratumServiceError::InvalidSolution(message) => {
+                assert!(message.contains("high 128 bits must be zero"));
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+        assert!(solution_receiver.try_recv().is_err());
     }
 }

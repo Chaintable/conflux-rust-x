@@ -1,6 +1,8 @@
 mod state;
 
-use crate::{BlockGenerator, MineWorker, SolutionReceiver};
+use crate::{
+    miner::has_zero_high_nonce, BlockGenerator, MineWorker, SolutionReceiver,
+};
 use cfxcore::pow::ProofOfWorkProblem;
 use log::{debug, trace, warn};
 use std::{
@@ -102,7 +104,7 @@ impl<'a> MiningSession<'a> {
 
             if let Some(mut mined_block) =
                 self.state.validate_and_claim_solution(&solution, |p, s| {
-                    self.bg.pow.validate(p, s)
+                    has_zero_high_nonce(s) && self.bg.pow.validate(p, s)
                 })
             {
                 mined_block.block_header.set_nonce(solution.nonce);
@@ -148,5 +150,5 @@ impl<'a> MiningSession<'a> {
 impl<'a> Deref for MiningSession<'a> {
     type Target = BlockGenerator;
 
-    fn deref(&self) -> &Self::Target { &*self.bg }
+    fn deref(&self) -> &Self::Target { self.bg }
 }

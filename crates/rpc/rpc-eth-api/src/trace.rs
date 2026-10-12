@@ -1,6 +1,8 @@
+use alloy_primitives::map::HashSet;
 use cfx_rpc_eth_types::{
-    debank::DebankOutPut, BlockNumber, Index, LocalizedSetAuthTrace,
-    LocalizedTrace, TraceFilter,
+    debank::DebankOutPut, BlockId, BlockOverrides, Index,
+    LocalizedSetAuthTrace, LocalizedTrace, RpcStateOverride, TraceFilter,
+    TraceResults, TraceType, TransactionRequest,
 };
 use cfx_types::H256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
@@ -10,13 +12,13 @@ pub trait TraceApi {
     /// Returns all traces produced at the given block.
     #[method(name = "block")]
     async fn block_traces(
-        &self, block_number: BlockNumber,
+        &self, block_number: BlockId,
     ) -> RpcResult<Option<Vec<LocalizedTrace>>>;
 
     /// Returns all set auth traces produced at the given block.
     #[method(name = "blockSetAuth")]
     async fn block_set_auth_traces(
-        &self, block_number: BlockNumber,
+        &self, block_number: BlockId,
     ) -> RpcResult<Option<Vec<LocalizedSetAuthTrace>>>;
 
     /// Returns all traces matching the provided filter.
@@ -36,9 +38,16 @@ pub trait TraceApi {
         &self, tx_hash: H256,
     ) -> RpcResult<Option<Vec<LocalizedTrace>>>;
 
+    #[method(name = "call")]
+    async fn trace_call(
+        &self, call: TransactionRequest, trace_types: HashSet<TraceType>,
+        block_id: Option<BlockId>, state_overrides: Option<RpcStateOverride>,
+        block_overrides: Option<Box<BlockOverrides>>,
+    ) -> RpcResult<TraceResults>;
+
     /// Returns debank's trace information for a given block.
     #[method(name = "debankBlock")]
     async fn trace_debank_block(
-        &self, block_number: BlockNumber,
+        &self, block_number: BlockId,
     ) -> RpcResult<Option<DebankOutPut>>;
 }

@@ -44,6 +44,10 @@ where
     }
 }
 
+impl<C: TreapMapConfig> Default for TreapMap<C> {
+    fn default() -> Self { Self::new() }
+}
+
 impl<C: TreapMapConfig> TreapMap<C> {
     pub fn new() -> TreapMap<C> {
         TreapMap {
@@ -88,7 +92,7 @@ impl<C: TreapMapConfig> TreapMap<C> {
     }
 
     pub fn remove(&mut self, key: &C::SearchKey) -> Option<C::Value> {
-        let sort_key = self.ext_map.get_sort_key(&key)?;
+        let sort_key = self.ext_map.get_sort_key(key)?;
 
         let (result, _, _) = Node::update_inner(
             &mut self.root,
@@ -183,7 +187,7 @@ impl<C: TreapMapConfig> TreapMap<C> {
     }
 
     /// See details in [`crate::accumulate_weight_search`]
-    pub fn search<F>(&self, f: F) -> Option<SearchResult<C, C::Weight>>
+    pub fn search<F>(&self, f: F) -> Option<SearchResult<'_, C, C::Weight>>
     where F: FnMut(&C::Weight, &Node<C>) -> SearchDirection<C::Weight> {
         Some(accumulate_weight_search(self.root.as_ref()?, f, |weight| {
             weight
@@ -196,7 +200,7 @@ impl<C: TreapMapConfig> TreapMap<C> {
     /// dimension.
     pub fn search_no_weight<F>(
         &self, mut f: F,
-    ) -> Option<SearchResult<C, NoWeight>>
+    ) -> Option<SearchResult<'_, C, NoWeight>>
     where F: FnMut(&Node<C>) -> SearchDirection<()> {
         static NW: NoWeight = NoWeight;
         Some(accumulate_weight_search(
@@ -206,7 +210,7 @@ impl<C: TreapMapConfig> TreapMap<C> {
         ))
     }
 
-    pub fn iter(&self) -> Iter<C> {
+    pub fn iter(&self) -> Iter<'_, C> {
         let mut iter = Iter { nodes: vec![] };
         if let Some(ref n) = self.root {
             iter.nodes.push(&**n);
@@ -215,7 +219,7 @@ impl<C: TreapMapConfig> TreapMap<C> {
         iter
     }
 
-    pub fn iter_range(&self, key: &C::SearchKey) -> Iter<C>
+    pub fn iter_range(&self, key: &C::SearchKey) -> Iter<'_, C>
     where C: TreapMapConfig<SortKey = ()> {
         let mut iter = Iter { nodes: vec![] };
         if let Some(ref n) = self.root {
@@ -305,7 +309,7 @@ impl<'a, C: TreapMapConfig> Iterator for Iter<'a, C> {
                     self.nodes.push(&**n);
                     self.extend_path();
                 }
-                Some(&node)
+                Some(node)
             }
         }
     }

@@ -106,7 +106,6 @@ pub trait PacketAssembler: Send + Sync {
 
 /// Packet with guard to automatically update throttling and high priority
 /// packets counter.
-
 struct Packet {
     // data to write to socket
     data: Vec<u8>,
@@ -342,7 +341,7 @@ impl<Socket: GenericSocket> GenericConnection<Socket> {
         if !data.is_empty() {
             let size = data.len();
             if self.assembler.is_oversized(size) {
-                return Err(Error::OversizedPacket.into());
+                return Err(Error::OversizedPacket);
             }
 
             trace!("Sending packet, token = {}, size = {}", self.token, size);
@@ -387,10 +386,7 @@ impl Connection {
             recv_buf: BytesMut::new(),
             send_queue: PrioritySendQueue::default(),
             sending_packet: None,
-            interest: Interest::READABLE, /* previously(mio0.6) use
-                                           * Ready::hup() |
-                                           * Ready::readable(), Ready::hub()
-                                           * is removed from 0.7 */
+            interest: Interest::READABLE,
             registered: AtomicBool::new(false),
             assembler: Box::new(PacketWithLenAssembler::default()),
         }
@@ -489,7 +485,7 @@ impl Connection {
 }
 
 /// User friendly connection information that used by Debug RPC.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionDetails {
     pub token: StreamToken,
@@ -514,7 +510,7 @@ impl PacketWithLenAssembler {
     fn new(data_len_bytes: usize, max_packet_len: Option<usize>) -> Self {
         assert!(data_len_bytes > 0 && data_len_bytes <= 3);
 
-        let max = usize::max_value() >> (64 - 8 * data_len_bytes);
+        let max = usize::MAX >> (64 - 8 * data_len_bytes);
         let max_packet_len = max_packet_len.unwrap_or(max);
         assert!(max_packet_len > data_len_bytes && max_packet_len <= max);
 
@@ -537,7 +533,7 @@ impl PacketAssembler for PacketWithLenAssembler {
 
     fn assemble(&self, data: &mut Vec<u8>) -> Result<(), Error> {
         if self.is_oversized(data.len()) {
-            return Err(Error::OversizedPacket.into());
+            return Err(Error::OversizedPacket);
         }
 
         // first n-bytes swapped to the end

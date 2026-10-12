@@ -39,14 +39,16 @@
 //! may be handy in some scenarios such CORS but if you want to access
 //! to the actual JSON-RPC details this is the middleware to use.
 
-use std::net::SocketAddr;
+use std::{future::Future, net::SocketAddr};
 
-use cfx_rpc_middlewares::{Metrics, Throttle};
+use cfx_rpc_middlewares::{load_throttling_manager, Metrics, Throttle};
 use jsonrpsee::{
     core::client::ClientT,
     rpc_params,
     server::{
-        middleware::rpc::{RpcServiceBuilder, RpcServiceT},
+        middleware::rpc::{
+            Batch, Notification, RpcServiceBuilder, RpcServiceT,
+        },
         RpcModule, Server,
     },
     types::Request,
@@ -57,14 +59,30 @@ use log::debug;
 #[derive(Clone)]
 pub struct Logger<S>(S);
 
-impl<'a, S> RpcServiceT<'a> for Logger<S>
-where S: RpcServiceT<'a> + Send + Sync
+impl<S> RpcServiceT for Logger<S>
+where S: RpcServiceT + Send + Sync
 {
-    type Future = S::Future;
+    type BatchResponse = S::BatchResponse;
+    type MethodResponse = S::MethodResponse;
+    type NotificationResponse = S::NotificationResponse;
 
-    fn call(&self, req: Request<'a>) -> Self::Future {
+    fn call<'a>(
+        &self, req: Request<'a>,
+    ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
         println!("logger middleware: method `{}`", req.method);
         self.0.call(req)
+    }
+
+    fn batch<'a>(
+        &self, batch: Batch<'a>,
+    ) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
+        self.0.batch(batch)
+    }
+
+    fn notification<'a>(
+        &self, n: Notification<'a>,
+    ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
+        self.0.notification(n)
     }
 }
 
@@ -100,11 +118,11 @@ async fn run_server() -> anyhow::Result<SocketAddr> {
 
     debug!("throttling config path: {:?}", config_path);
 
+    let throttle_manager =
+        load_throttling_manager(Some(config_path.to_str().unwrap()), "test");
     let rpc_middleware = RpcServiceBuilder::new()
-        .layer_fn(move |s| {
-            Throttle::new(Some(config_path.to_str().unwrap()), "test", s)
-        })
-        .layer_fn(|s| Metrics::new(s));
+        .layer_fn(move |s| Throttle::new(throttle_manager.clone(), s))
+        .layer_fn(|s| Metrics::new(s, true));
 
     let server = Server::builder()
         .set_rpc_middleware(rpc_middleware)

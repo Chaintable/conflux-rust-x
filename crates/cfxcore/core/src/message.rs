@@ -142,13 +142,13 @@ pub fn decode_rlp_and_check_deprecation<T: Message + Decodable>(
     Ok(msg)
 }
 
-pub fn decode_msg(mut msg: &[u8]) -> Option<(MsgId, Rlp)> {
+pub fn decode_msg(mut msg: &[u8]) -> Option<(MsgId, Rlp<'_>)> {
     let len = msg.len();
     if len < 2 {
         return None;
     }
 
-    let msg_id = parse_msg_id_leb128_2_bytes_at_most(&mut msg);
+    let msg_id = parse_msg_id_leb128_2_bytes_at_most(&mut msg).ok()?;
     if msg.is_empty() {
         return None;
     }
@@ -185,7 +185,7 @@ macro_rules! build_msg_basic {
             fn msg_name(&self) -> &'static str { $name_str }
 
             fn encode(&self) -> Vec<u8> {
-                let mut encoded = self.rlp_bytes();
+                let mut encoded = self.rlp_bytes().to_vec();
                 self.push_msg_id_leb128_encoding(&mut encoded);
                 encoded
             }

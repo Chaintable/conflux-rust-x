@@ -21,9 +21,8 @@ use cfx_executor::{
 };
 use cfx_types::{Space, H160};
 use cfx_vm_types::{ActionParams, CallType, Error, InterpreterInfo};
-use revm::db::InMemoryDB;
+use revm::{database::InMemoryDB, state::EvmState as State};
 use revm_interpreter::{Gas, InstructionResult, InterpreterResult};
-use revm_primitives::State;
 
 use std::sync::Arc;
 
@@ -41,9 +40,6 @@ pub struct GethTracer {
     opts: GethDebugTracingOptions,
     // gas stack, used to trace gas_spent in call_result/create_result
     pub gas_stack: Vec<u64>,
-    /// When true, drain_trace stores raw CallTraceArena instead of
-    /// GethTrace
-    pub debank_mode: bool,
 }
 
 impl GethTracer {
@@ -66,6 +62,7 @@ impl GethTracer {
                             .expect("should success");
                         TracingInspectorConfig::from_geth_call_config(&c)
                     }
+                    FlatCallTracer => TracingInspectorConfig::none(),
                     PreStateTracer => {
                         let c = opts
                             .tracer_config
@@ -74,6 +71,7 @@ impl GethTracer {
                             .expect("should success");
                         TracingInspectorConfig::from_geth_prestate_config(&c)
                     }
+                    Erc7562Tracer => TracingInspectorConfig::none(),
                 }
             }
             Some(GethDebugTracerType::JsTracer(_)) => {
@@ -90,7 +88,6 @@ impl GethTracer {
             gas_left: tx_gas_limit,
             opts,
             gas_stack: Vec::new(),
-            debank_mode: false,
         }
     }
 
@@ -149,7 +146,7 @@ impl GethTracer {
                         .unwrap();
                     GethTrace::PreStateTracer(frame)
                 }
-                NoopTracer | MuxTracer => {
+                NoopTracer | MuxTracer | FlatCallTracer | Erc7562Tracer => {
                     GethTrace::NoopTracer(NoopFrame::default())
                 }
             },
@@ -176,15 +173,7 @@ impl GethTracer {
 
 impl DrainTrace for GethTracer {
     fn drain_trace(self, map: &mut typemap::ShareDebugMap) {
-        if self.debank_mode {
-            let gas_used = self.gas_used();
-            map.insert::<DebankRawTraceKey>(DebankRawTrace {
-                arena: self.inner.traces,
-                gas_used,
-            });
-        } else {
-            map.insert::<GethTraceKey>(self.drain());
-        }
+        map.insert::<GethTraceKey>(self.drain());
     }
 }
 
@@ -192,19 +181,6 @@ pub struct GethTraceKey;
 
 impl typemap::Key for GethTraceKey {
     type Value = GethTrace;
-}
-
-/// Raw trace data for debank trace building.
-#[derive(Debug, Clone)]
-pub struct DebankRawTrace {
-    pub arena: crate::CallTraceArena,
-    pub gas_used: u64,
-}
-
-pub struct DebankRawTraceKey;
-
-impl typemap::Key for DebankRawTraceKey {
-    type Value = DebankRawTrace;
 }
 
 impl CheckpointTracer for GethTracer {}

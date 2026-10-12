@@ -1,12 +1,12 @@
 # Project Layout
 
-This repository contains several Rust crates that implement the different building blocks of an Conflux node. The high-level structure of the repository is as follows:
+This repository contains several Rust crates that implement the different building blocks of a Conflux node. The high-level structure of the repository is as follows:
 
 - [bins](../../bins): All binary crates located in this folder
-- [crates](../../crates): All crates library
+- [crates](../../crates): All library crates
 - [tools](../../tools/): Tools for benchmark, testing (These crates are stand-alone and not included in the whole workspace)
 - [internal_contract](../../internal_contract): Internal contracts's abi and interface
-- [integration_tests] and [tests](../../tests): The python integration tests
+- [integration_tests](../../integration_tests) and [tests](../../tests): The python integration tests
 - [run](../../run): Node run misc, include default config file and start scripts
 - [dev-support](../../dev-support): Dev support scripts
 - [docs](../../docs): Documentation
@@ -59,7 +59,20 @@ Other utility crates:
 
 ### dbs
 
-The [dbs](../../crates/dbs) directory contains the database crates.
+All database-related code is located under [dbs](../../crates/dbs), which contains the core logic for the entire node's data storage. Specifically, it mainly includes two major categories of data: blockchain (block header, block body, receipt) and state (state trie, storage trie), as well as some indexing and development data (trace).
+
+The underlying layer primarily uses rocksdb, and also uses sqlite to store some snapshot-related data.
+
+1. kvdb-rocksdb: Rust wrapper for rocksdb, which depends on third-party crates (kvdb, rocksdb) at the underlying layer
+2. db: Mainly provides the open_database method, which returns a db instance that can be used for data reading and writing
+3. db-errors: Database operation error definitions
+4. **storage**: The main implementation of the state database, including mpt, mpt snapshot and other logic, providing lower-level read/write interfaces `StateTrait`. This crate is the core code for state storage
+5. statedb: Simple wrapper around storage, providing higher-level read interfaces `StateDbExt`
+
+Additionally, the upper-level modules that call the db module mainly consist of two parts:
+
+1. crates/cfxcore/core/src/block_data_manager: Encapsulates all data read/write interfaces
+2. crates/execution/executor/src/state: The state object of the execution module, which essentially wraps StateDb and provides account state reading and updating interfaces for EVM.
 
 ### network
 
@@ -73,7 +86,7 @@ The [client](../../crates/client) crate contains the client startup logic and th
 
 Conflux provides a standard JSON-RPC 2.0 interface to allow external ecosystems (SDKs, wallets, etc.) to interact with the blockchain. Conflux includes two spaces: Core Space and eSpace, each with its own RPC.
 
-The RPC implementation for eSpace is mainly located in the [crates/rpc](crates/rpc) directory and is developed using the [jsonrpsee](https://github.com/paritytech/jsonrpsee) RPC framework. It includes multiple crates:
+The RPC implementation for eSpace is mainly located in the [crates/rpc](../../crates/rpc) directory and is developed using the [jsonrpsee](https://github.com/paritytech/jsonrpsee) RPC framework. It includes multiple crates:
 
 - [rpc-primitives](../../crates/rpc/rpc-primitives/): Definitions of the raw types for RPC.
 - [rpc-cfx-types](../../crates/rpc/rpc-cfx-types/): RPC type definitions for Core Space.
@@ -84,7 +97,7 @@ The RPC implementation for eSpace is mainly located in the [crates/rpc](crates/r
 - [rpc-builder](../../crates/rpc/rpc-builder/): Logic for RPC interface registration and service startup.
 - [rpc-utils](../../crates/rpc/rpc-utils/): Implementation of common utilities, such as error code definitions.
 
-The RPC implementation for Core Space is located in the [crates/client](../../crates/client) crate, developed using [jsonrpc-core](https://github.com/paritytech/jsonrpc)e. The core code is in the src/rpc directory.
+The core code is in the src/rpc directory.
 
 ### Stratum
 

@@ -5,11 +5,7 @@
 use super::{super::super::super::errors::*, MyInto, PrimitiveNum};
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use std::{
-    cmp::Ordering,
-    marker::PhantomData,
-    mem::{self, MaybeUninit},
-    ptr,
-    vec::Vec,
+    cmp::Ordering, marker::PhantomData, mem::MaybeUninit, ptr, vec::Vec,
 };
 
 // To make it easy for any value type to implement HeapValueUtil.
@@ -25,8 +21,10 @@ impl<PosT: PrimitiveNum> HeapHandle<PosT> {
     pub fn get_pos(&self) -> PosT { self.pos }
 
     // Update heap handle for value being moved in heap.
+    #[allow(dead_code)]
     pub fn set_handle(&mut self, pos: PosT) { self.pos = pos; }
 
+    #[allow(dead_code)]
     pub fn set_removed(&mut self) { self.pos = PosT::from(Self::NULL_POS); }
 }
 
@@ -40,6 +38,7 @@ impl<PosT: PrimitiveNum> Default for HeapHandle<PosT> {
 
 pub struct TrivialValueWithHeapHandle<ValueType, PosT: PrimitiveNum> {
     pub value: ValueType,
+    #[allow(dead_code)]
     handle: HeapHandle<PosT>,
 }
 
@@ -51,19 +50,22 @@ impl<ValueType, PosT: PrimitiveNum>
     pub fn new(value: ValueType) -> Self {
         Self {
             value,
-            handle: unsafe { mem::uninitialized() },
+            handle: HeapHandle::default(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_handle_mut(&mut self) -> &mut HeapHandle<PosT> {
         &mut self.handle
     }
 
     // Update heap handle for value being moved in heap.
+    #[allow(dead_code)]
     pub fn set_handle(&mut self, pos: PosT) {
         self.get_handle_mut().set_handle(pos);
     }
 
+    #[allow(dead_code)]
     pub fn set_removed(&mut self) { self.get_handle_mut().set_removed(); }
 }
 
@@ -525,8 +527,11 @@ impl<PosT: PrimitiveNum, ValueType> RemovableHeap<PosT, ValueType> {
             return Err(Error::OutOfCapacity.into());
         }
 
-        let mut hole: Hole<ValueType> = unsafe { mem::uninitialized() };
-        hole.value = value;
+        // `pointer_pos` stays uninit until `insert_with_hole_unchecked` writes
+        // it; `value` is moved in directly (the old `mem::uninitialized()` +
+        // assignment dropped an uninitialized `value`, UB if `ValueType:
+        // Drop`).
+        let hole = Hole::new_uninit_pointer(value);
 
         let pos = unsafe { self.insert_with_hole_unchecked(hole, value_util) };
 

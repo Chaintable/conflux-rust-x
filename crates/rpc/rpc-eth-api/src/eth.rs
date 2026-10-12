@@ -1,9 +1,8 @@
 use cfx_rpc_eth_types::{
-    AccessListResult, AccountPendingTransactions, Block,
-    BlockNumber as BlockId, BlockOverrides, Bundle, EthCallResponse,
-    EthRpcLogFilter as Filter, FeeHistory, Header, Log, Receipt,
-    RpcStateOverride, SimulatePayload, SimulatedBlock, StateContext,
-    SyncStatus, Transaction, TransactionRequest,
+    AccessListResult, AccountPendingTransactions, Block, BlockId,
+    BlockOverrides, Bundle, EthCallResponse, EthRpcLogFilter as Filter,
+    FeeHistory, Header, Log, Receipt, RpcStateOverride, SimulatePayload,
+    SimulatedBlock, StateContext, SyncStatus, Transaction, TransactionRequest,
 };
 use cfx_rpc_primitives::{Bytes, Index};
 use cfx_types::{Address, H256, H64, U256, U64};
@@ -232,6 +231,7 @@ pub trait EthApi {
     #[method(name = "createAccessList")]
     async fn create_access_list(
         &self, request: TransactionRequest, block_number: Option<BlockId>,
+        state_override: Option<RpcStateOverride>,
     ) -> RpcResult<AccessListResult>;
 
     /// Generates and returns an estimate of how much gas is necessary to allow

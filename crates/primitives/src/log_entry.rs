@@ -50,21 +50,25 @@ impl rlp::Encodable for LogEntry {
 // fields, so we implement backward-compatible decoding manually.
 impl rlp::Decodable for LogEntry {
     fn decode(rlp: &rlp::Rlp) -> Result<Self, rlp::DecoderError> {
-        match rlp.item_count()? {
-            3 => Ok(LogEntry {
+        let log = match rlp.item_count()? {
+            3 => LogEntry {
                 address: rlp.val_at(0)?,
                 topics: rlp.list_at(1)?,
                 data: rlp.val_at(2)?,
                 space: Space::Native,
-            }),
-            4 => Ok(LogEntry {
+            },
+            4 => LogEntry {
                 address: rlp.val_at(0)?,
                 topics: rlp.list_at(1)?,
                 data: rlp.val_at(2)?,
                 space: rlp.val_at(3)?,
-            }),
-            _ => Err(rlp::DecoderError::RlpInvalidLength),
+            },
+            _ => return Err(rlp::DecoderError::RlpInvalidLength),
+        };
+        if log.topics.len() > 4 {
+            return Err(rlp::DecoderError::Custom("LogEntry too many topics"));
         }
+        Ok(log)
     }
 }
 
@@ -105,6 +109,8 @@ pub struct LocalizedLogEntry {
     pub block_hash: H256,
     /// Epoch number.
     pub epoch_number: BlockNumber,
+    /// Timestamp of the block in which this log was created.
+    pub block_timestamp: Option<u64>,
     /// Hash of transaction in which this log was created.
     pub transaction_hash: H256,
     /// Index of transaction within block.

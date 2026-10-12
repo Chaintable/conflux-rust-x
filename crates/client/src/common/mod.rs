@@ -14,19 +14,16 @@ use std::{
 
 use cfx_rpc_builder::RpcServerHandle;
 use cfx_util_macros::bail;
-use jsonrpc_http_server::Server as HttpServer;
-use jsonrpc_tcp_server::Server as TcpServer;
-use jsonrpc_ws_server::Server as WSServer;
 use parking_lot::{Condvar, Mutex};
 use rand_08::{prelude::StdRng, rngs::OsRng, SeedableRng};
 use threadpool::ThreadPool;
 
-use crate::keylib::KeyPair;
 use blockgen::BlockGenerator;
 use cfx_executor::machine::{Machine, VmFactory};
 use cfx_parameters::genesis::{
     DEV_GENESIS_KEY_PAIR_2, GENESIS_ACCOUNT_ADDRESS,
 };
+use cfx_rpc_cfx_types::apis::ApiSet;
 use cfx_storage::StorageManager;
 use cfx_tasks::TaskManager;
 use cfx_types::{address_util::AddressUtil, Address, Space, U256};
@@ -65,18 +62,14 @@ use cfx_config::{parse_config_address_string, Configuration};
 
 use crate::{
     accounts::{account_provider, keys_path},
-    rpc::{
-        extractor::RpcExtractor,
-        impls::{
-            cfx::RpcImpl, common::RpcImpl as CommonRpcImpl,
-            pubsub::PubSubClient,
-        },
-        launch_async_rpc_servers, setup_debug_rpc_apis, setup_public_rpc_apis,
-    },
+    keylib::KeyPair,
+    rpc_starter::{launch_async_rpc_servers, launch_cfx_async_rpc_servers},
 };
+#[cfg(all(unix, feature = "jemalloc-prof"))]
+use cfx_mallocator_utils::start_pprf_server;
 use cfxcore::consensus::pos_handler::read_initial_nodes_from_file;
 
-pub mod delegate_convert;
+pub mod panic_handler;
 pub mod shutdown_handler;
 
 /// Hold all top-level components for a type of client.
@@ -149,10 +142,8 @@ pub fn initialize_common_modules(
         Arc<ConsensusGraph>,
         Arc<SynchronizationGraph>,
         Arc<NetworkService>,
-        Arc<CommonRpcImpl>,
         Arc<AccountProvider>,
         Arc<Notifications>,
-        PubSubClient,
         Arc<TokioRuntime>,
     ),
     String,
@@ -162,6 +153,25 @@ pub fn initialize_common_modules(
     // TODO(lpl): Keep it properly and allow not running pos.
     let (self_pos_private_key, self_vrf_private_key) = {
         let key_path = Path::new(&conf.raw_conf.pos_private_key_path);
+
+        let read_pos_password = |prompt: &str| -> Result<Vec<u8>, String> {
+            match rpassword::prompt_password(prompt) {
+                Ok(password) => Ok(password.into_bytes()),
+                Err(e) => {
+                    let mut msg = format!("{:?}", e);
+                    // On macOS, attempting to open `/dev/tty` without a
+                    // controlling TTY can return ENXIO
+                    // ("Device not configured"). This commonly happens when
+                    // running under a debugger/IDE that doesn't allocate a real
+                    // terminal.
+                    if e.raw_os_error() == Some(6) {
+                        msg.push_str(" Hint: maybe no controlling TTY detected (macOS ENXIO: \"Device not configured\"). If you are running under VS Code debugger or with redirected stdio, set `CFX_POS_KEY_ENCRYPTION_PASSWORD` env var to avoid interactive prompting.");
+                    }
+                    Err(msg)
+                }
+            }
+        };
+
         let default_passwd = if conf.is_test_or_dev_mode() {
             Some(vec![])
         } else {
@@ -176,7 +186,9 @@ pub fn initialize_common_modules(
         if key_path.exists() {
             let passwd = match default_passwd {
                 Some(p) => p,
-                None => rpassword::read_password_from_tty(Some("PoS key detected, please input your encryption password.\nPassword:")).map_err(|e| format!("{:?}", e))?.into_bytes()
+                None => read_pos_password(
+                    "PoS key detected, please input your encryption password.\nPassword:",
+                )?,
             };
             match load_pri_key(key_path, &passwd) {
                 Ok((sk, vrf_sk)) => {
@@ -191,12 +203,8 @@ pub fn initialize_common_modules(
             let passwd = match default_passwd {
                 Some(p) => p,
                 None => {
-                    let p = rpassword::read_password_from_tty(Some("PoS key is not detected and will be generated instead, please input your encryption password. This password is needed when you restart the node\nPassword:")).map_err(|e| format!("{:?}", e))?.into_bytes();
-                    let p2 = rpassword::read_password_from_tty(Some(
-                        "Repeat Password:",
-                    ))
-                    .map_err(|e| format!("{:?}", e))?
-                    .into_bytes();
+                    let p = read_pos_password("PoS key is not detected and will be generated instead, please input your encryption password. This password is needed when you restart the node\nPassword:")?;
+                    let p2 = read_pos_password("Repeat Password:")?;
                     if p != p2 {
                         bail!("Passwords do not match!");
                     }
@@ -393,6 +401,9 @@ pub fn initialize_common_modules(
         None
     };
 
+    let mut execution_config = conf.execution_config();
+    execution_config.debank_live =
+        debank_pipeline(conf, &machine)?.map(|p| p as _);
     let consensus = Arc::new(ConsensusGraph::new(
         consensus_conf,
         txpool.clone(),
@@ -401,7 +412,7 @@ pub fn initialize_common_modules(
         pow_config.clone(),
         pow.clone(),
         notifications.clone(),
-        conf.execution_config(),
+        execution_config,
         verification_config.clone(),
         node_type,
         pos_verifier.clone(),
@@ -447,23 +458,8 @@ pub fn initialize_common_modules(
         .expect("failed to initialize account provider"),
     );
 
-    let common_impl = Arc::new(CommonRpcImpl::new(
-        exit,
-        consensus.clone(),
-        network.clone(),
-        txpool.clone(),
-        accounts.clone(),
-        pos_verifier.clone(),
-    ));
     let tokio_runtime =
         Arc::new(TokioRuntime::new().map_err(|e| e.to_string())?);
-
-    let pubsub = PubSubClient::new(
-        tokio_runtime.clone(),
-        consensus.clone(),
-        notifications.clone(),
-        *network.get_network_type(),
-    );
 
     Ok((
         machine,
@@ -476,10 +472,8 @@ pub fn initialize_common_modules(
         consensus,
         sync_graph,
         network,
-        common_impl,
         accounts,
         notifications,
-        pubsub,
         tokio_runtime,
     ))
 }
@@ -495,14 +489,10 @@ pub fn initialize_not_light_node_modules(
         Arc<ConsensusGraph>,
         Arc<SynchronizationService>,
         Arc<BlockGenerator>,
-        Option<HttpServer>,
-        Option<HttpServer>,
-        Option<TcpServer>,
-        Option<TcpServer>,
-        Option<WSServer>,
-        Option<WSServer>,
         Arc<PosVerifier>,
         Arc<TokioRuntime>,
+        Option<RpcServerHandle>,
+        Option<RpcServerHandle>,
         Option<RpcServerHandle>,
         TaskManager,
     ),
@@ -519,10 +509,8 @@ pub fn initialize_not_light_node_modules(
         consensus,
         sync_graph,
         network,
-        common_impl,
         accounts,
         notifications,
-        pubsub,
         tokio_runtime,
     ) = initialize_common_modules(conf, exit.clone(), node_type)?;
 
@@ -594,7 +582,7 @@ pub fn initialize_not_light_node_modules(
         sync.clone(),
         secret_store.clone(),
         genesis_accounts,
-        &conf,
+        conf,
         network.net_key_pair().unwrap(),
     );
 
@@ -613,7 +601,7 @@ pub fn initialize_not_light_node_modules(
         maybe_txgen.clone(),
         pow_config.clone(),
         pow.clone(),
-        maybe_author.clone().unwrap_or_default(),
+        maybe_author.unwrap_or_default(),
         pos_verifier.clone(),
     ));
     if conf.is_dev_mode() {
@@ -645,80 +633,10 @@ pub fn initialize_not_light_node_modules(
         }
     }
 
-    let rpc_impl = Arc::new(RpcImpl::new(
-        consensus.clone(),
-        sync.clone(),
-        blockgen.test_api(),
-        txpool.clone(),
-        maybe_txgen.clone(),
-        maybe_direct_txgen,
-        conf.rpc_impl_config(),
-        accounts,
-    ));
+    info!("Using new async core space RPC implementation");
 
     let task_manager = TaskManager::new(tokio_runtime.handle().clone());
     let task_executor = task_manager.executor();
-
-    let debug_rpc_http_server = super::rpc::start_http(
-        conf.local_http_config(),
-        setup_debug_rpc_apis(
-            common_impl.clone(),
-            rpc_impl.clone(),
-            pubsub.clone(),
-            &conf,
-        ),
-    )?;
-
-    let debug_rpc_tcp_server = super::rpc::start_tcp(
-        conf.local_tcp_config(),
-        setup_debug_rpc_apis(
-            common_impl.clone(),
-            rpc_impl.clone(),
-            pubsub.clone(),
-            &conf,
-        ),
-        RpcExtractor,
-    )?;
-
-    let rpc_tcp_server = super::rpc::start_tcp(
-        conf.tcp_config(),
-        setup_public_rpc_apis(
-            common_impl.clone(),
-            rpc_impl.clone(),
-            pubsub.clone(),
-            &conf,
-        ),
-        RpcExtractor,
-    )?;
-
-    let debug_rpc_ws_server = super::rpc::start_ws(
-        conf.local_ws_config(),
-        setup_public_rpc_apis(
-            common_impl.clone(),
-            rpc_impl.clone(),
-            pubsub.clone(),
-            &conf,
-        ),
-        RpcExtractor,
-    )?;
-
-    let rpc_ws_server = super::rpc::start_ws(
-        conf.ws_config(),
-        setup_public_rpc_apis(
-            common_impl.clone(),
-            rpc_impl.clone(),
-            pubsub.clone(),
-            &conf,
-        ),
-        RpcExtractor,
-    )?;
-
-    let rpc_http_server = super::rpc::start_http(
-        conf.http_config(),
-        setup_public_rpc_apis(common_impl, rpc_impl, pubsub, &conf),
-    )?;
-
-    network.start();
 
     let eth_rpc_server_handle =
         tokio_runtime.block_on(launch_async_rpc_servers(
@@ -730,7 +648,62 @@ pub fn initialize_not_light_node_modules(
             conf,
         ))?;
 
+    // Start V2 async core space RPC servers.
+    let cfx_rpc_server_handle =
+        tokio_runtime.block_on(launch_cfx_async_rpc_servers(
+            consensus.clone(),
+            sync.clone(),
+            txpool.clone(),
+            data_man.clone(),
+            network.clone(),
+            pos_verifier.clone(),
+            notifications.clone(),
+            task_executor.clone(),
+            accounts.clone(),
+            exit.clone(),
+            blockgen.test_api(),
+            maybe_txgen.clone(),
+            maybe_direct_txgen.clone(),
+            conf,
+            conf.raw_conf.public_rpc_apis.clone(),
+            false,
+        ))?;
+
+    let debug_cfx_rpc_server_handle =
+        tokio_runtime.block_on(launch_cfx_async_rpc_servers(
+            consensus.clone(),
+            sync.clone(),
+            txpool.clone(),
+            data_man.clone(),
+            network.clone(),
+            pos_verifier.clone(),
+            notifications.clone(),
+            task_executor.clone(),
+            accounts.clone(),
+            exit.clone(),
+            blockgen.test_api(),
+            maybe_txgen.clone(),
+            maybe_direct_txgen.clone(),
+            conf,
+            ApiSet::All,
+            true,
+        ))?;
+
+    // start pprf server, which is used to serve the pprof data for heap
+    // profiling
+    #[cfg(all(unix, feature = "jemalloc-prof"))]
+    if let Some(pprf_addr) = conf.raw_conf.profiling_listen_addr.as_ref() {
+        let pprf_addr = pprf_addr.clone();
+        let _pprf_server_handle = tokio_runtime.spawn(async move {
+            if let Err(e) = start_pprf_server(&pprf_addr).await {
+                eprintln!("Error starting pprof server: {}", e);
+            }
+        });
+    }
+
     metrics::initialize(conf.metrics_config(), task_executor.clone());
+
+    network.start();
 
     Ok((
         data_man,
@@ -739,15 +712,11 @@ pub fn initialize_not_light_node_modules(
         consensus,
         sync,
         blockgen,
-        debug_rpc_http_server,
-        rpc_http_server,
-        debug_rpc_tcp_server,
-        rpc_tcp_server,
-        debug_rpc_ws_server,
-        rpc_ws_server,
         pos_verifier,
         tokio_runtime,
         eth_rpc_server_handle,
+        cfx_rpc_server_handle,
+        debug_cfx_rpc_server_handle,
         task_manager,
     ))
 }
@@ -806,4 +775,75 @@ pub fn initialize_txgens(
     };
 
     (maybe_multi_genesis_txgen, maybe_direct_txgen_with_contract)
+}
+
+/// Starts the Chaintable pipeline writer if `debank_pipeline_start_epoch` is
+/// set.
+fn debank_pipeline(
+    conf: &Configuration, machine: &Machine,
+) -> Result<Option<Arc<cfx_debank_pipeline::DebankPipeline>>, String> {
+    let raw = &conf.raw_conf;
+    let Some(start_epoch) = raw.debank_pipeline_start_epoch else {
+        return Ok(None);
+    };
+    let kafka = match (&raw.debank_pipeline_brokers, &raw.debank_pipeline_topic)
+    {
+        (Some(brokers), Some(topic)) => {
+            Some(cfx_debank_pipeline::uploader::KafkaConfig {
+                brokers: brokers.clone(),
+                topic: topic.clone(),
+            })
+        }
+        (None, None) => None,
+        _ => {
+            return Err(
+                "debank_pipeline_{brokers,topic} must be set together".into()
+            )
+        }
+    };
+    let upload = match (
+        &raw.debank_pipeline_region,
+        &raw.debank_pipeline_nodex_bucket,
+        &raw.debank_pipeline_chain_table_bucket,
+    ) {
+        (Some(region), Some(nodex), Some(chain_table)) => {
+            Some(cfx_debank_pipeline::uploader::UploadConfig {
+                region: region.clone(),
+                nodex_bucket: nodex.clone(),
+                chain_table_bucket: chain_table.clone(),
+                kafka,
+            })
+        }
+        (None, None, None) if kafka.is_none() => None,
+        _ => {
+            return Err("debank_pipeline_{region,nodex_bucket,\
+                chain_table_bucket} must be set together, and are required \
+                by debank_pipeline_{brokers,topic}"
+                .into())
+        }
+    };
+    let spool_dir = match &raw.debank_pipeline_spool_dir {
+        Some(dir) => dir.into(),
+        None => Path::new(&raw.conflux_data_dir).join("debank_spool"),
+    };
+    let chain_id = machine
+        .params()
+        .chain_id
+        .read()
+        .get_chain_id(start_epoch)
+        .in_evm_space() as u64;
+    cfx_debank_pipeline::DebankPipeline::start(
+        cfx_debank_pipeline::PipelineConfig {
+            start_epoch,
+            genesis_epoch: raw
+                .debank_pipeline_genesis_epoch
+                .unwrap_or(start_epoch),
+            spool_dir,
+            chain_id,
+            version: raw.debank_pipeline_version.clone(),
+            max_fork_depth: raw.debank_pipeline_max_fork_depth,
+            upload,
+        },
+    )
+    .map(Some)
 }

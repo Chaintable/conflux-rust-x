@@ -1,16 +1,18 @@
-use cfx_rpc_utils::error::{
-    jsonrpc_error_helpers::request_rejected_too_many_request_error,
-    jsonrpsee_error_helpers::jsonrpc_error_to_error_object_owned,
-};
+use cfx_rpc_utils::error::jsonrpsee_error_helpers::request_rejected_too_many_request_error;
 use cfx_util_macros::bail;
-use futures::FutureExt;
-use futures_util::future::BoxFuture;
 use jsonrpsee::{
-    core::RpcResult,
-    server::{middleware::rpc::RpcServiceT, MethodResponse},
+    core::{
+        middleware::{BatchEntry, BatchEntryErr, ResponseFuture},
+        RpcResult,
+    },
+    server::{
+        middleware::rpc::{Batch, Notification, RpcServiceT},
+        MethodResponse,
+    },
+    types::Request,
 };
-use jsonrpsee_types::Request;
 use log::debug;
+use std::future::Future;
 use throttling::token_bucket::{ThrottleResult, TokenBucketManager};
 
 #[derive(Clone)]
@@ -19,21 +21,29 @@ pub struct Throttle<S> {
     manager: TokenBucketManager,
 }
 
-impl<S> Throttle<S> {
-    pub fn new(file: Option<&str>, section: &str, s: S) -> Self {
-        let manager = match file {
-            Some(file) => TokenBucketManager::load(file, Some(section))
-                .expect("invalid throttling configuration file"),
-            None => TokenBucketManager::default(),
-        };
+/// jsonrpsee re-runs the rpc middleware factory per HTTP request / WS
+/// connection, so build the manager once here and clone it into each
+/// `Throttle` (clones share the token buckets); building it inside `layer_fn`
+/// would reset the buckets every request.
+pub fn load_throttling_manager(
+    file: Option<&str>, section: &str,
+) -> TokenBucketManager {
+    match file {
+        Some(file) => TokenBucketManager::load(file, Some(section))
+            .expect("invalid throttling configuration file"),
+        None => TokenBucketManager::default(),
+    }
+}
 
+impl<S> Throttle<S> {
+    pub fn new(manager: TokenBucketManager, s: S) -> Self {
         Throttle {
             service: s,
             manager,
         }
     }
 
-    pub fn before(&self, name: &String) -> RpcResult<()> {
+    pub fn before(&self, name: &str) -> RpcResult<()> {
         let bucket = match self.manager.get(name) {
             Some(bucket) => bucket,
             None => return Ok(()),
@@ -48,38 +58,81 @@ impl<S> Throttle<S> {
                 let err = request_rejected_too_many_request_error(Some(
                     format!("throttled in {:?}", wait_time),
                 ));
-                bail!(jsonrpc_error_to_error_object_owned(err))
+                bail!(err)
             }
             ThrottleResult::AlreadyThrottled => {
                 debug!("RPC {} already throttled", name);
                 let err = request_rejected_too_many_request_error(Some(
                     "already throttled, please try again later".into(),
                 ));
-                bail!(jsonrpc_error_to_error_object_owned(err))
+                bail!(err)
             }
         }
     }
 }
 
-impl<'a, S> RpcServiceT<'a> for Throttle<S>
-where S: RpcServiceT<'a> + Send + Sync + Clone + 'static
+impl<S> RpcServiceT for Throttle<S>
+where S: RpcServiceT<
+            MethodResponse = MethodResponse,
+            BatchResponse = MethodResponse,
+            NotificationResponse = MethodResponse,
+        > + Send
+        + Sync
+        + Clone
+        + 'static
 {
-    type Future = BoxFuture<'a, MethodResponse>;
+    type BatchResponse = S::BatchResponse;
+    type MethodResponse = S::MethodResponse;
+    type NotificationResponse = S::NotificationResponse;
 
-    fn call(&self, req: Request<'a>) -> Self::Future {
-        let service = self.service.clone();
-        let throlltle_result = self.before(&req.method_name().to_string());
-        // Box::pin(async move { service.call(req).await })
-        match throlltle_result {
+    fn call<'a>(
+        &self, req: Request<'a>,
+    ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
+        let throttle_result = self.before(req.method_name());
+        match throttle_result {
             Ok(_) => {
                 debug!("throttle interceptor: method `{}` success", req.method);
-                Box::pin(async move { service.call(req).await }).boxed()
+                ResponseFuture::future(self.service.call(req))
             }
             Err(e) => {
                 debug!("throttle interceptor: method `{}` failed", req.method);
-                Box::pin(async move { MethodResponse::error(req.id, e) })
-                    .boxed()
+                ResponseFuture::ready(MethodResponse::error(req.id, e))
             }
+        }
+    }
+
+    fn batch<'a>(
+        &self, mut batch: Batch<'a>,
+    ) -> impl Future<Output = Self::BatchResponse> + Send + 'a {
+        for entry in batch.iter_mut() {
+            let (id, name) = match entry {
+                Ok(BatchEntry::Call(req)) => {
+                    (req.id.clone(), req.method_name())
+                }
+                Ok(BatchEntry::Notification(_)) => continue,
+                Err(_) => continue,
+            };
+
+            let throttle_result = self.before(name);
+            if let Err(e) = throttle_result {
+                // This will create a new error response for batch and replace
+                // the method call
+                *entry = Err(BatchEntryErr::new(id, e));
+            }
+        }
+
+        self.service.batch(batch)
+    }
+
+    fn notification<'a>(
+        &self, n: Notification<'a>,
+    ) -> impl Future<Output = Self::NotificationResponse> + Send + 'a {
+        let throttle_result = self.before(n.method_name());
+        match throttle_result {
+            Ok(_) => ResponseFuture::future(self.service.notification(n)),
+            // Notifications are not expected to return a response so just
+            // ignore if the rate limit is reached.
+            Err(_e) => ResponseFuture::ready(MethodResponse::notification()),
         }
     }
 }

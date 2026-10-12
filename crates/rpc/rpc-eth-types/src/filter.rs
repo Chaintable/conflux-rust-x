@@ -18,7 +18,7 @@
 // You should have received a copy of the GNU General Public License
 // along with OpenEthereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use crate::{BlockNumber, Error as SelfError, Log};
+use crate::{BlockId, Error as SelfError, Log};
 use cfx_rpc_cfx_types::traits::BlockProvider;
 use cfx_rpc_primitives::VariadicValue;
 use cfx_types::{Space, H160, H256};
@@ -41,9 +41,9 @@ pub type Topic = VariadicValue<H256>;
 #[serde(rename_all = "camelCase")]
 pub struct EthRpcLogFilter {
     /// From Block
-    pub from_block: Option<BlockNumber>,
+    pub from_block: Option<BlockId>,
     /// To Block
-    pub to_block: Option<BlockNumber>,
+    pub to_block: Option<BlockId>,
     /// Block hash
     pub block_hash: Option<H256>,
     /// Address
@@ -52,10 +52,23 @@ pub struct EthRpcLogFilter {
     pub topics: Option<Vec<Topic>>,
 }
 
+const MAX_TOPICS: usize = 4;
+
 impl EthRpcLogFilter {
     pub fn into_primitive(
         self, consensus: impl BlockProvider,
     ) -> Result<PrimitiveFilter, SelfError> {
+        let topics_len = self.topics.as_ref().map_or(0, |v| v.len());
+        if topics_len > MAX_TOPICS {
+            return Err(SelfError::InvalidParams(
+                "topics".into(),
+                format!(
+                    "expected at most {} topic filters, got {}",
+                    MAX_TOPICS, topics_len
+                ),
+            ));
+        }
+
         let params = LogFilterParams {
             address: self.address.map(|v| v.to_vec()),
             topics: self

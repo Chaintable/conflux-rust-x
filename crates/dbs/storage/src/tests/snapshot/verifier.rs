@@ -84,7 +84,7 @@ fn test_slice_verifier() {
     let mut rng = get_rng_for_test();
     let mut keys: Vec<Vec<u8>> = generate_keys(TEST_NUMBER_OF_KEYS)
         .iter()
-        .filter(|_| rng.gen_bool(0.5))
+        .filter(|_| rng.random_bool(0.5))
         .cloned()
         .collect();
     keys.sort();
@@ -336,6 +336,7 @@ impl KeyValueDbIterableTrait<MptKeyValue, [u8], FakeSnapshotDb>
         &mut self, lower_bound_incl: &[u8], upper_bound_excl: Option<&[u8]>,
     ) -> Result<
         Wrap<
+            '_,
             KvdbIterIterator<(Vec<u8>, Box<[u8]>), [u8], FakeSnapshotDb>,
             dyn FallibleIterator<Item = (Vec<u8>, Box<[u8]>), Error = Error>,
         >,
@@ -359,6 +360,7 @@ impl KeyValueDbIterableTrait<MptKeyValue, [u8], FakeSnapshotDb>
         &mut self, lower_bound_excl: &[u8], upper_bound_excl: &[u8],
     ) -> Result<
         Wrap<
+            '_,
             KvdbIterIterator<(Vec<u8>, Box<[u8]>), [u8], FakeSnapshotDb>,
             dyn FallibleIterator<Item = (Vec<u8>, Box<[u8]>), Error = Error>,
         >,
@@ -480,6 +482,7 @@ impl SnapshotDbTrait for Arc<Mutex<FakeSnapshotDb>> {
         &self,
     ) -> Result<
         Wrap<
+            '_,
             Self::SnapshotKvdbIterType,
             dyn KeyValueDbIterableTrait<MptKeyValue, [u8], FakeSnapshotDb>,
         >,
@@ -646,7 +649,7 @@ fn test_full_sync_verifier() {
     let mut rng = get_rng_for_test();
     let mut keys: Vec<Vec<u8>> = generate_keys(TEST_NUMBER_OF_KEYS)
         .iter()
-        .filter(|_| rng.gen_bool(0.5))
+        .filter(|_| rng.random_bool(0.5))
         .cloned()
         .collect();
     keys.sort();

@@ -7,10 +7,13 @@ use pow_types::StakingEvent;
 use primitives::Receipt;
 
 use alloy_rpc_types_trace::geth::GethTrace;
-use geth_tracer::{DebankRawTrace, DebankRawTraceKey, GethTraceKey};
+use geth_tracer::GethTraceKey;
 
 use super::{
-    observer::exec_tracer::{ExecTrace, ExecTraceKey},
+    observer::{
+        debank_tracer::{DebankTraceKey, DebankTxTrace},
+        exec_tracer::{ExecTrace, ExecTraceKey},
+    },
     phantom_tx::{recover_phantom, PhantomTransaction},
 };
 
@@ -22,25 +25,25 @@ pub struct ProcessTxOutcome {
     pub tx_exec_error_msg: String,
     pub consider_repacked: bool,
     pub geth_trace: Option<GethTrace>,
-    pub debank_raw_trace: Option<DebankRawTrace>,
+    pub debank_trace: Option<DebankTxTrace>,
 }
 
-fn parity_traces(outcome: &ExecutionOutcome) -> Vec<ExecTrace> {
+pub fn parity_traces(outcome: &ExecutionOutcome) -> Vec<ExecTrace> {
     outcome
         .try_as_executed()
         .and_then(|executed| executed.ext_result.get::<ExecTraceKey>().cloned())
         .unwrap_or_default()
 }
 
-fn geth_traces(outcome: &ExecutionOutcome) -> Option<GethTrace> {
+pub fn geth_traces(outcome: &ExecutionOutcome) -> Option<GethTrace> {
     outcome
         .try_as_executed()
         .and_then(|executed| executed.ext_result.get::<GethTraceKey>().cloned())
 }
 
-fn debank_raw_traces(outcome: &ExecutionOutcome) -> Option<DebankRawTrace> {
+fn debank_trace(outcome: &ExecutionOutcome) -> Option<DebankTxTrace> {
     outcome.try_as_executed().and_then(|executed| {
-        executed.ext_result.get::<DebankRawTraceKey>().cloned()
+        executed.ext_result.get::<DebankTraceKey>().cloned()
     })
 }
 
@@ -50,7 +53,7 @@ pub fn make_process_tx_outcome(
 ) -> ProcessTxOutcome {
     let tx_traces = parity_traces(&outcome);
     let geth_trace = geth_traces(&outcome);
-    let debank_raw_trace = debank_raw_traces(&outcome);
+    let debank_trace = debank_trace(&outcome);
     let tx_exec_error_msg = outcome.error_message();
     let consider_repacked = outcome.consider_repacked();
     let receipt = outcome.make_receipt(accumulated_gas_used, spec);
@@ -67,6 +70,6 @@ pub fn make_process_tx_outcome(
         tx_exec_error_msg,
         consider_repacked,
         geth_trace,
-        debank_raw_trace,
+        debank_trace,
     }
 }

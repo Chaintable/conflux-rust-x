@@ -213,15 +213,17 @@ impl ProofOfWorkConfig {
 // bound of our PoW. The rationale is to provide a solution for block
 // withholding attack among mining pools.
 pub fn nonce_to_lower_bound(nonce: &U256) -> U256 {
-    let mut buf = [0u8; 32];
-    nonce.to_big_endian(&mut buf[..]);
+    let mut buf = nonce.to_big_endian();
     for i in 16..32 {
         buf[i] = 0;
     }
     buf[0] = buf[0] & 0x7f;
-    // Note that U256::from assumes big_endian of the bytes
-    let lower_bound = U256::from(buf);
+    let lower_bound = U256::from_big_endian(&buf);
     lower_bound
+}
+
+pub fn nonce_has_non_zero_high_128_bits(nonce: &U256) -> bool {
+    !(*nonce >> 128).is_zero()
 }
 
 pub fn pow_hash_to_quality(hash: &H256, nonce: &U256) -> U256 {
@@ -301,7 +303,7 @@ impl PowComputer {
             for i in 0..32 {
                 buf[i] = block_hash[i];
             }
-            nonce.to_little_endian(&mut buf[32..64]);
+            buf[32..64].copy_from_slice(&nonce.to_little_endian());
             let intermediate = keccak_hash(&buf[..]);
             let mut tmp = [0u8; 32];
             for i in 0..32 {
@@ -340,4 +342,15 @@ fn test_octopus() {
             .unwrap();
     let start_nonce = 0x2333333333u64 & (!0x1f);
     pow.compute(&U256::from(start_nonce), &block_hash, 2);
+}
+
+#[test]
+fn test_nonce_has_non_zero_high_128_bits() {
+    assert!(!nonce_has_non_zero_high_128_bits(&U256::zero()));
+    assert!(!nonce_has_non_zero_high_128_bits(
+        &((U256::one() << 128) - U256::one())
+    ));
+    assert!(nonce_has_non_zero_high_128_bits(&(U256::one() << 128)));
+    assert!(nonce_has_non_zero_high_128_bits(&(U256::one() << 254)));
+    assert!(nonce_has_non_zero_high_128_bits(&(U256::one() << 255)));
 }

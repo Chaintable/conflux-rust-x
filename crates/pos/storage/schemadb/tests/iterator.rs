@@ -75,13 +75,13 @@ fn collect_values(iter: SchemaIterator<TestSchema>) -> Vec<u32> {
 }
 
 struct TestDB {
-    _tmpdir: diem_temppath::TempPath,
+    _tmpdir: tempfile::TempDir,
     db: DB,
 }
 
 impl TestDB {
     fn new() -> Self {
-        let tmpdir = diem_temppath::TempPath::new();
+        let tmpdir = tempfile::TempDir::new().unwrap();
         let column_families =
             vec![DEFAULT_CF_NAME, TestSchema::COLUMN_FAMILY_NAME];
         let mut db_opts = rocksdb::DBOptions::default();
@@ -115,13 +115,13 @@ impl TestDB {
 }
 
 impl TestDB {
-    fn iter(&self) -> SchemaIterator<TestSchema> {
+    fn iter(&self) -> SchemaIterator<'_, TestSchema> {
         self.db
             .iter(Default::default())
             .expect("Failed to create iterator.")
     }
 
-    fn rev_iter(&self) -> SchemaIterator<TestSchema> {
+    fn rev_iter(&self) -> SchemaIterator<'_, TestSchema> {
         self.db
             .rev_iter(Default::default())
             .expect("Failed to create iterator.")

@@ -1,0 +1,27 @@
+[package]
+name = "cfx-debank-pipeline"
+edition = "2021"
+version.workspace = true
+authors.workspace = true
+description = "Chaintable pipeline writer for Conflux eSpace"
+documentation.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[dependencies]
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+cfx-rpc-eth-impl = { workspace = true }
+cfx-types = { workspace = true }
+cfxcore = { workspace = true }
+flate2 = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+parking_lot = { workspace = true }
+rdkafka = { workspace = true }
+rlp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }

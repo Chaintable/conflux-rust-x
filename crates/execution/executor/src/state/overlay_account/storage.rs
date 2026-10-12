@@ -346,3 +346,24 @@ fn decode_storage_key(key: &Vec<u8>) -> Option<Vec<u8>> {
         None
     }
 }
+
+impl OverlayAccount {
+    /// Storage entries written since the last commit to the statedb, with
+    /// writes of the ongoing transaction taking precedence.
+    pub(in crate::state) fn uncommitted_storage_writes(
+        &self,
+    ) -> Vec<(Vec<u8>, U256)> {
+        let mut writes: std::collections::HashMap<Vec<u8>, U256> = self
+            .storage_committed_cache
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.value))
+            .collect();
+        for (k, item) in self.storage_write_cache.read().iter() {
+            if let WriteCacheItem::Write(v) = item {
+                writes.insert(k.clone(), v.value);
+            }
+        }
+        writes.into_iter().collect()
+    }
+}

@@ -46,6 +46,7 @@ const NAT_PMP_PORT_MAPPING_RETRY_WAITING_DURATION_MS: u64 = 250;
 /// API
 pub trait SocketAddrExt {
     /// Returns true if the address appears to be globally routable.
+    #[allow(dead_code)]
     fn is_global_s(&self) -> bool;
 
     // Ipv4 specific
@@ -364,9 +365,9 @@ fn search_upnp(local: &NodeEndpoint) -> Option<NodeEndpoint> {
             // address from the socket, like `miniupnpc`.
             // Note that using local_ip (0.0.0.0) will cause
             // NOT_AUTHORIZED error.
-            let client_sock = TcpStream::connect(&gateway.addr).ok()?;
+            let client_sock = TcpStream::connect(gateway.addr).ok()?;
             match client_sock.local_addr() {
-                Ok(SocketAddr::V4(v4_addr)) => v4_addr.ip().clone(),
+                Ok(SocketAddr::V4(v4_addr)) => *v4_addr.ip(),
                 _ => return None,
             }
         };
@@ -427,7 +428,7 @@ fn search_natpmp(local: &NodeEndpoint) -> Option<NodeEndpoint> {
                         if retry == 0 {
                             debug!("natpmp retry timeout");
                             return Err(
-                                natpmp::Error::NATPMP_ERR_UNDEFINEDERROR.into(),
+                                natpmp::Error::NATPMP_ERR_UNDEFINEDERROR,
                             );
                         } else {
                             retry -= 1;
@@ -441,7 +442,7 @@ fn search_natpmp(local: &NodeEndpoint) -> Option<NodeEndpoint> {
                         debug!("IP request error: {}", e);
                         Err(e)
                     }
-                    _ => Err(natpmp::Error::NATPMP_ERR_UNDEFINEDERROR.into()),
+                    _ => Err(natpmp::Error::NATPMP_ERR_UNDEFINEDERROR),
                 }?;
             };
 
@@ -462,7 +463,7 @@ fn search_natpmp(local: &NodeEndpoint) -> Option<NodeEndpoint> {
                     debug!("Port mapping for TCP error: {}", e);
                     Err(e)
                 }
-                _ => Err(natpmp::Error::NATPMP_ERR_UNDEFINEDERROR.into()),
+                _ => Err(natpmp::Error::NATPMP_ERR_UNDEFINEDERROR),
             }?;
 
             // this function call want to receive `Response::UDP` response from
@@ -482,7 +483,7 @@ fn search_natpmp(local: &NodeEndpoint) -> Option<NodeEndpoint> {
                     debug!("Port mapping for UDP error: {}", e);
                     Err(e)
                 }
-                _ => Err(natpmp::Error::NATPMP_ERR_UNDEFINEDERROR.into()),
+                _ => Err(natpmp::Error::NATPMP_ERR_UNDEFINEDERROR),
             }?;
 
             Ok(NodeEndpoint {
