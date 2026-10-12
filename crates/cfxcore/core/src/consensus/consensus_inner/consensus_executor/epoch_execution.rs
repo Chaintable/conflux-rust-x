@@ -60,10 +60,13 @@ pub struct DebankTask<'a> {
 }
 
 impl ConsensusExecutionHandler {
+    /// `debank_traces` turns on the debank tracer for a real (not virtual)
+    /// execution and receives the recorded call trees.
     pub(super) fn process_epoch_transactions<'a>(
         &self, state: &mut State, epoch_blocks: &Vec<Arc<Block>>,
         start_block_number: u64, on_local_pivot: bool,
         virtual_call: Option<VirtualCall<'a>>,
+        debank_traces: Option<&mut Vec<DebankTxRawTrace>>,
     ) -> DbResult<Vec<Arc<BlockReceipts>>> {
         self.prefetch_storage_for_execution(state, epoch_blocks);
 
@@ -83,6 +86,7 @@ impl ConsensusExecutionHandler {
             executive_trace: self.config.executive_trace,
             dry_run,
             virtual_call,
+            debank_trace: debank_traces.is_some(),
             pivot_block,
             base_gas_price,
             burnt_gas_price,
@@ -119,6 +123,12 @@ impl ConsensusExecutionHandler {
                 );
             }
             None => {}
+        }
+        if let Some(debank_traces) = debank_traces {
+            std::mem::swap(
+                &mut epoch_recorder.debank_raw_traces,
+                debank_traces,
+            );
         }
 
         // Persist staking events only from canonical (local-pivot) execution,
@@ -488,6 +498,9 @@ impl ConsensusExecutionHandler {
             Some(VirtualCall::DebankTrace(_)) => {
                 observer.debank_tracer = Some(DebankTracer::default());
             }
+            None if block_context.epoch_context.debank_trace => {
+                observer.debank_tracer = Some(DebankTracer::default());
+            }
             None => {}
         }
         observer
@@ -577,6 +590,7 @@ struct EpochProcessContext<'a> {
     executive_trace: bool,
     virtual_call: Option<VirtualCall<'a>>,
     dry_run: bool,
+    debank_trace: bool,
 
     pivot_block: &'a Block,
 

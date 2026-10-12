@@ -2,6 +2,7 @@
 // Conflux is free software and distributed under GNU General Public License.
 // See http://www.gnu.org/licenses/
 
+pub mod debank_live;
 pub mod epoch_execution;
 
 use core::convert::TryFrom;
@@ -74,7 +75,11 @@ use geth_tracer::GethTraceWithHash;
 use alloy_rpc_types_trace::geth::GethDebugTracingOptions;
 use cfx_rpc_eth_types::EvmOverrides;
 
-use self::epoch_execution::{GethTask, VirtualCall};
+use self::{
+    debank_live::{DebankEpochTrace, DebankLiveEpoch, DebankLiveSink},
+    epoch_execution::{GethTask, VirtualCall},
+};
+use crate::consensus::consensus_graph::rpc_api::phantom_block_provider::build_phantom_block;
 
 lazy_static! {
     static ref CONSENSIS_EXECUTION_TIMER: Arc<dyn Meter> =
@@ -1053,6 +1058,19 @@ impl ConsensusExecutionHandler {
                 &pivot_block_header,
                 on_local_pivot,
             );
+            if let Some(sink) = self.debank_live_sink(
+                &pivot_block_header,
+                on_local_pivot,
+                debug_record.is_none(),
+            ) {
+                if sink.needs_epoch(pivot_block_header.height(), epoch_hash) {
+                    self.replay_debank_live_epoch(
+                        sink,
+                        epoch_block_hashes,
+                        start_block_number,
+                    );
+                }
+            }
             return;
         }
 
@@ -1076,6 +1094,13 @@ impl ConsensusExecutionHandler {
             .new_state(pivot_block, recover_mpt_during_construct_pivot_state)
             .expect("Cannot init state");
 
+        let debank_live = self.debank_live_sink(
+            &pivot_block.block_header,
+            on_local_pivot,
+            debug_record.is_none(),
+        );
+        let mut debank_traces = debank_live.map(|_| vec![]);
+
         let epoch_receipts = self
             .process_epoch_transactions(
                 &mut state,
@@ -1083,6 +1108,7 @@ impl ConsensusExecutionHandler {
                 start_block_number,
                 on_local_pivot,
                 /* virtual_call */ None,
+                debank_traces.as_mut(),
             )
             // TODO: maybe propagate the error all the way up so that the
             // program may restart by itself.
@@ -1111,9 +1137,38 @@ impl ConsensusExecutionHandler {
         )
         .expect("db error");
 
+        // Rewards and PoS interest only touch the native space, so the
+        // eSpace diff is the same as the one of a `trace_debankBlock` replay.
+        let debank_state_diff = debank_live.map(|_| {
+            state
+                .extract_debank_state_diff(Space::Ethereum)
+                .expect("db error")
+        });
+
         let commit_result = state
             .commit(*epoch_hash, debug_record.as_deref_mut())
             .expect(&concat!(file!(), ":", line!(), ":", column!()));
+
+        if let (Some(sink), Some(traces), Some(state_diff)) =
+            (debank_live, debank_traces, debank_state_diff)
+        {
+            let trace = DebankEpochTrace {
+                traces,
+                state_diff,
+                state_root: commit_result.state_root.aux_info.state_root_hash,
+                parent_state_root: self
+                    .epoch_state_root_hash(
+                        pivot_block.block_header.parent_hash(),
+                    )
+                    .expect("parent epoch is executed"),
+            };
+            self.send_debank_live_epoch(
+                sink,
+                &epoch_blocks,
+                start_block_number,
+                trace,
+            );
+        }
 
         if on_local_pivot {
             self.notify_txpool(&commit_result, epoch_hash);
@@ -1138,6 +1193,125 @@ impl ConsensusExecutionHandler {
             .state_availability_boundary
             .write()
             .adjust_upper_bound(&pivot_block.block_header);
+    }
+
+    /// The debank sink if the epoch must be produced for it.
+    fn debank_live_sink(
+        &self, pivot_header: &BlockHeader, on_local_pivot: bool,
+        no_debug_record: bool,
+    ) -> Option<&Arc<dyn DebankLiveSink>> {
+        let sink = self.config.debank_live.as_ref()?;
+        let height = pivot_header.height();
+        if on_local_pivot
+            && no_debug_record
+            && height > 0
+            && height >= sink.start_epoch()
+        {
+            Some(sink)
+        } else {
+            None
+        }
+    }
+
+    fn epoch_state_root_hash(&self, epoch_hash: &H256) -> Option<H256> {
+        self.data_man
+            .get_epoch_execution_commitment_with_db(epoch_hash)
+            .map(|c| c.state_root_with_aux_info.aux_info.state_root_hash)
+    }
+
+    /// Replays an epoch that was executed before, for the debank sink.
+    fn replay_debank_live_epoch(
+        &self, sink: &Arc<dyn DebankLiveSink>, epoch_block_hashes: &Vec<H256>,
+        start_block_number: u64,
+    ) {
+        let epoch_blocks = self
+            .data_man
+            .blocks_by_hash_list(
+                epoch_block_hashes,
+                true, /* update_cache */
+            )
+            .expect("blocks exist");
+        let pivot = &epoch_blocks.last().expect("Not empty").block_header;
+        let height = pivot.height();
+        let replay = || -> Result<DebankEpochTrace, String> {
+            let parent_hash = *pivot.parent_hash();
+            let (traces, state_diff) = self
+                .collect_blocks_debank_trace(
+                    parent_hash,
+                    height - 1,
+                    &epoch_blocks,
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(DebankEpochTrace {
+                traces,
+                state_diff,
+                state_root: self
+                    .epoch_state_root_hash(&pivot.hash())
+                    .ok_or("epoch is not executed")?,
+                parent_state_root: self
+                    .epoch_state_root_hash(&parent_hash)
+                    .ok_or("parent epoch is not executed")?,
+            })
+        };
+        match replay() {
+            Ok(trace) => self.send_debank_live_epoch(
+                sink,
+                &epoch_blocks,
+                start_block_number,
+                trace,
+            ),
+            // The state is gone, e.g. the node was down for too long. The
+            // epoch can only be produced by an archive node now.
+            Err(e) => error!(
+                "debank live: cannot replay epoch {} {:?}: {}",
+                height,
+                pivot.hash(),
+                e
+            ),
+        }
+    }
+
+    fn send_debank_live_epoch(
+        &self, sink: &Arc<dyn DebankLiveSink>, epoch_blocks: &Vec<Arc<Block>>,
+        start_block_number: u64, trace: DebankEpochTrace,
+    ) {
+        let pivot = epoch_blocks.last().expect("Not empty");
+        let height = pivot.block_header.height();
+        let evm_chain_id = self
+            .machine
+            .params()
+            .chain_id
+            .read()
+            .get_chain_id(height)
+            .in_evm_space();
+        // The consensus lock may be held by a thread waiting for this
+        // execution, so block numbers are derived from the epoch instead of
+        // being looked up.
+        let block_number = |hash: &H256| {
+            epoch_blocks
+                .iter()
+                .position(|b| b.hash() == *hash)
+                .map(|idx| compute_block_number(start_block_number, idx as u64))
+                .ok_or_else(|| "block not in epoch".into())
+        };
+        let phantom_block = build_phantom_block(
+            &self.data_man,
+            self.machine.params(),
+            pivot,
+            epoch_blocks,
+            evm_chain_id,
+            false, /* include_traces */
+            block_number,
+        )
+        .expect("phantom block of an executed epoch")
+        .expect("execution results exist");
+        sink.on_epoch_executed(DebankLiveEpoch {
+            phantom_block,
+            trace,
+        })
+        .unwrap_or_else(|e| {
+            panic!("debank live: failed to persist epoch {}: {}", height, e)
+        });
     }
 
     fn update_on_skipped_execution(
@@ -1593,6 +1767,7 @@ impl ConsensusExecutionHandler {
             start_block_number,
             false,
             /* virtual_call */ None,
+            /* debank_traces */ None,
         )
     }
 
@@ -1710,11 +1885,7 @@ impl ConsensusExecutionHandler {
             state_space,
         )?;
 
-        let start_block_number = self
-            .data_man
-            .get_epoch_execution_context(&epoch_id)
-            .map(|v| v.start_block_number)
-            .expect("should exist");
+        let start_block_number = self.epoch_start_block_number(blocks)?;
 
         let mut answer = vec![];
         let virtual_call = VirtualCall::GethTrace(GethTask {
@@ -1728,6 +1899,7 @@ impl ConsensusExecutionHandler {
             start_block_number,
             false,
             Some(virtual_call),
+            /* debank_traces */ None,
         )?;
 
         Ok(answer)
@@ -1748,11 +1920,7 @@ impl ConsensusExecutionHandler {
             state_space,
         )?;
 
-        let start_block_number = self
-            .data_man
-            .get_epoch_execution_context(&epoch_id)
-            .map(|v| v.start_block_number)
-            .expect("should exist");
+        let start_block_number = self.epoch_start_block_number(blocks)?;
 
         let mut answer = vec![];
         let virtual_call =
@@ -1765,11 +1933,27 @@ impl ConsensusExecutionHandler {
             start_block_number,
             false,
             Some(virtual_call),
+            /* debank_traces */ None,
         )?;
 
         let state_diff = state.extract_debank_state_diff(Space::Ethereum)?;
 
         Ok((answer, state_diff))
+    }
+
+    /// The block number of the first block of the epoch `blocks`. `epoch_id`
+    /// of the replays is the parent epoch, whose execution context holds the
+    /// start block number of the parent instead.
+    fn epoch_start_block_number(
+        &self, blocks: &Vec<Arc<Block>>,
+    ) -> CoreResult<u64> {
+        let pivot_hash = blocks.last().expect("epoch not empty").hash();
+        match self.data_man.get_epoch_execution_context(&pivot_hash) {
+            Some(v) => Ok(v.start_block_number),
+            None => {
+                bail!("execution context of epoch {:?} not found", pivot_hash)
+            }
+        }
     }
 
     fn get_state_by_epoch_id_and_space(
@@ -1825,4 +2009,6 @@ impl ConsensusExecutionHandler {
 
 pub struct ConsensusExecutionConfiguration {
     pub executive_trace: bool,
+    /// Receives the debank traces of executed epochs, see [`debank_live`].
+    pub debank_live: Option<Arc<dyn DebankLiveSink>>,
 }

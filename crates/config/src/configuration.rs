@@ -378,6 +378,21 @@ build_config! {
         (print_memory_usage_period_s, (Option<u64>), None)
         (target_block_gas_limit, (u64), DEFAULT_TARGET_BLOCK_GAS_LIMIT)
         (executive_trace, (bool), false)
+        // Chaintable pipeline: produce the `trace_debankBlock` data of every
+        // executed eSpace block from this epoch on and upload it to S3/Kafka.
+        (debank_pipeline_start_epoch, (Option<u64>), None)
+        // The first block announced on Kafka, defaults to the start epoch.
+        (debank_pipeline_genesis_epoch, (Option<u64>), None)
+        // Local directory holding produced blocks until they are uploaded,
+        // defaults to `<conflux_data_dir>/debank_spool`.
+        (debank_pipeline_spool_dir, (Option<String>), None)
+        (debank_pipeline_version, (String), String::new())
+        (debank_pipeline_region, (Option<String>), None)
+        (debank_pipeline_nodex_bucket, (Option<String>), None)
+        (debank_pipeline_chain_table_bucket, (Option<String>), None)
+        (debank_pipeline_brokers, (Option<String>), None)
+        (debank_pipeline_topic, (Option<String>), None)
+        (debank_pipeline_max_fork_depth, (u64), 1024)
         (check_status_genesis, (bool), true)
         (packing_gas_limit_block_count, (u64), 10)
         (poll_lifetime_in_seconds, (Option<u32>), None)
@@ -1221,6 +1236,7 @@ impl Configuration {
     pub fn execution_config(&self) -> ConsensusExecutionConfiguration {
         ConsensusExecutionConfiguration {
             executive_trace: self.raw_conf.executive_trace,
+            debank_live: None,
         }
     }
 

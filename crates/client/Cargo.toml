@@ -21,6 +21,7 @@ log = { workspace = true }
 cfx-types = { workspace = true }
 cfx-bytes = { workspace = true }
 cfxcore = { workspace = true }
+cfx-debank-pipeline = { workspace = true }
 network = { workspace = true }
 db = { workspace = true }
 blockgen = { workspace = true }

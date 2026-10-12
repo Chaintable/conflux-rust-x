@@ -27,33 +27,50 @@ use cfx_rpc_eth_types::{
 use cfx_types::{Address, Space, H256, U256};
 use cfx_util_macros::bail;
 use cfx_vm_types::{CallType, CreateType};
-use cfxcore::{errors::Result as CoreResult, ConsensusGraph};
+use cfxcore::{
+    consensus::consensus_inner::consensus_executor::debank_live::DebankEpochTrace,
+    errors::Result as CoreResult, ConsensusGraph,
+};
 use keccak_hash::keccak;
 use primitives::{receipt::TransactionStatus, Action, SignedTransaction};
 
 const PARENT_CALL_FAILED: &str = "parent call failed";
 
+/// Re-executes the epoch of `pb` and builds its pipeline output.
 pub fn trace_debank_block(
     consensus: &ConsensusGraph, pb: PhantomBlock,
 ) -> CoreResult<DebankOutPut> {
     let height = pb.pivot_header.height();
     let pivot_hash = pb.pivot_header.hash();
 
-    let (raw_traces, state_diff, state_root, parent_state_root) = if height == 0
-    {
-        let state_root = consensus.epoch_state_root_hash(&pivot_hash)?;
-        (vec![], DebankStateDiff::default(), state_root, H256::zero())
+    let epoch = if height == 0 {
+        DebankEpochTrace {
+            traces: vec![],
+            state_diff: DebankStateDiff::default(),
+            state_root: consensus.epoch_state_root_hash(&pivot_hash)?,
+            parent_state_root: H256::zero(),
+        }
     } else {
-        let epoch = consensus.collect_epoch_debank_trace(height, pivot_hash)?;
-        (
-            epoch.traces,
-            epoch.state_diff,
-            epoch.state_root,
-            epoch.parent_state_root,
-        )
+        consensus.collect_epoch_debank_trace(height, pivot_hash)?
     };
+    build_debank_output(&pb, epoch)
+}
 
-    let mut header = Header::from_phantom(&pb);
+/// Builds the pipeline output of an epoch from its eSpace block and the call
+/// trees and state diff recorded while executing it.
+pub fn build_debank_output(
+    pb: &PhantomBlock, epoch: DebankEpochTrace,
+) -> CoreResult<DebankOutPut> {
+    let height = pb.pivot_header.height();
+    let pivot_hash = pb.pivot_header.hash();
+    let DebankEpochTrace {
+        traces: raw_traces,
+        state_diff,
+        state_root,
+        parent_state_root,
+    } = epoch;
+
+    let mut header = Header::from_phantom(pb);
     // The eSpace header carries the deferred state root of epoch
     // `height - 5`; consumers key the state diff by `header.stateRoot`, so it
     // must be the state root of this epoch.
@@ -77,7 +94,7 @@ pub fn trace_debank_block(
         let receipt = &pb.receipts[idx];
         let tx_id = format_hash(&tx.hash());
 
-        builder.txs.push(build_transaction(&pb, idx, tx));
+        builder.txs.push(build_transaction(pb, idx, tx));
 
         // Phantom transactions are the only eSpace transactions without gas
         // price (see `PhantomTransaction::into_eip155`).

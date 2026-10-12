@@ -63,6 +63,7 @@ members = [
     "crates/rpc/rpc-eth-api",
     "crates/execution/parity-trace-types",
     "crates/rpc/rpc-eth-impl",
+    "crates/debank-pipeline",
     "crates/rpc/rpc-common-impl",
     "crates/util/util-macros",
     "crates/rpc/rpc-utils",
@@ -184,6 +185,7 @@ cfx-rpc-eth-api = { path = "./crates/rpc/rpc-eth-api" }
 cfx-rpc-cfx-api = { path = "./crates/rpc/rpc-cfx-api" }
 cfx-util-macros = { path = "./crates/util/util-macros" }
 cfx-rpc-eth-impl = { path = "./crates/rpc/rpc-eth-impl" }
+cfx-debank-pipeline = { path = "./crates/debank-pipeline" }
 cfx-rpc-utils = { path = "./crates/rpc/rpc-utils" }
 cfx-rpc-builder = { path = "./crates/rpc/rpc-builder" }
 cfx-rpc-cfx-impl = { path = "./crates/rpc/rpc-cfx-impl" }
@@ -276,6 +278,10 @@ tower-http = "0.6"
 
 # async
 tokio = "1.48"
+aws-config = "1"
+aws-sdk-s3 = "1"
+rdkafka = "0.37"
+flate2 = "1"
 tokio-stream = "0.1"
 tokio-test = "0.4"
 futures = "0.3"

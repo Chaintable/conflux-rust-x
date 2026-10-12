@@ -145,7 +145,33 @@ pub struct BlockFile {
     pub storage_contracts: Vec<String>,
 }
 
+/// Matches Go `types.BlockValidation`, uploaded next to the block file.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BlockValidation {
+    pub validation_hash: i64,
+    pub is_fork: bool,
+    pub txs_count: usize,
+    pub events_count: usize,
+    pub traces_count: usize,
+    pub error_events_count: usize,
+    pub error_traces_count: usize,
+    pub storage_contracts_count: usize,
+}
+
 impl BlockFile {
+    pub fn validation(&self) -> BlockValidation {
+        BlockValidation {
+            validation_hash: self.validation_hash(),
+            is_fork: false,
+            txs_count: self.txs.len(),
+            events_count: self.events.len(),
+            traces_count: self.traces.len(),
+            error_events_count: self.error_events.len(),
+            error_traces_count: self.error_traces.len(),
+            storage_contracts_count: self.storage_contracts.len(),
+        }
+    }
+
     /// Matches Go `BlockFile.Validation().ValidationHash`: error events and
     /// error traces are not included.
     pub fn validation_hash(&self) -> i64 {

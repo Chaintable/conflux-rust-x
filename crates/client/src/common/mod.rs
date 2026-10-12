@@ -401,6 +401,9 @@ pub fn initialize_common_modules(
         None
     };
 
+    let mut execution_config = conf.execution_config();
+    execution_config.debank_live =
+        debank_pipeline(conf, &machine)?.map(|p| p as _);
     let consensus = Arc::new(ConsensusGraph::new(
         consensus_conf,
         txpool.clone(),
@@ -409,7 +412,7 @@ pub fn initialize_common_modules(
         pow_config.clone(),
         pow.clone(),
         notifications.clone(),
-        conf.execution_config(),
+        execution_config,
         verification_config.clone(),
         node_type,
         pos_verifier.clone(),
@@ -772,4 +775,66 @@ pub fn initialize_txgens(
     };
 
     (maybe_multi_genesis_txgen, maybe_direct_txgen_with_contract)
+}
+
+/// Starts the Chaintable pipeline writer if `debank_pipeline_start_epoch` is
+/// set.
+fn debank_pipeline(
+    conf: &Configuration, machine: &Machine,
+) -> Result<Option<Arc<cfx_debank_pipeline::DebankPipeline>>, String> {
+    let raw = &conf.raw_conf;
+    let Some(start_epoch) = raw.debank_pipeline_start_epoch else {
+        return Ok(None);
+    };
+    let upload = match (
+        &raw.debank_pipeline_region,
+        &raw.debank_pipeline_nodex_bucket,
+        &raw.debank_pipeline_chain_table_bucket,
+        &raw.debank_pipeline_brokers,
+        &raw.debank_pipeline_topic,
+    ) {
+        (
+            Some(region),
+            Some(nodex),
+            Some(chain_table),
+            Some(brokers),
+            Some(topic),
+        ) => Some(cfx_debank_pipeline::uploader::UploadConfig {
+            region: region.clone(),
+            nodex_bucket: nodex.clone(),
+            chain_table_bucket: chain_table.clone(),
+            brokers: brokers.clone(),
+            topic: topic.clone(),
+        }),
+        (None, None, None, None, None) => None,
+        _ => {
+            return Err("debank_pipeline_{region,nodex_bucket,\
+                chain_table_bucket,brokers,topic} must be set together"
+                .into())
+        }
+    };
+    let spool_dir = match &raw.debank_pipeline_spool_dir {
+        Some(dir) => dir.into(),
+        None => Path::new(&raw.conflux_data_dir).join("debank_spool"),
+    };
+    let chain_id = machine
+        .params()
+        .chain_id
+        .read()
+        .get_chain_id(start_epoch)
+        .in_evm_space() as u64;
+    cfx_debank_pipeline::DebankPipeline::start(
+        cfx_debank_pipeline::PipelineConfig {
+            start_epoch,
+            genesis_epoch: raw
+                .debank_pipeline_genesis_epoch
+                .unwrap_or(start_epoch),
+            spool_dir,
+            chain_id,
+            version: raw.debank_pipeline_version.clone(),
+            max_fork_depth: raw.debank_pipeline_max_fork_depth,
+            upload,
+        },
+    )
+    .map(Some)
 }

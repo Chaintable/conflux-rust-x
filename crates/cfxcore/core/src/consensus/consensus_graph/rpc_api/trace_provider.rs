@@ -22,20 +22,7 @@ use rayon::prelude::*;
 use std::{cmp::max, collections::HashSet, sync::Arc};
 
 use super::super::ConsensusGraph;
-use crate::consensus::consensus_inner::consensus_executor::epoch_execution::DebankTxRawTrace;
-use cfx_executor::state::debank_diff::DebankStateDiff;
-
-/// Output of re-executing an epoch for `trace_debankBlock`.
-pub struct DebankEpochTrace {
-    /// Call trees of the executed transactions, in execution order.
-    pub traces: Vec<DebankTxRawTrace>,
-    /// eSpace accounts changed by the epoch.
-    pub state_diff: DebankStateDiff,
-    /// State root hash after the epoch.
-    pub state_root: H256,
-    /// State root hash after the parent epoch.
-    pub parent_state_root: H256,
-}
+pub use crate::consensus::consensus_inner::consensus_executor::debank_live::DebankEpochTrace;
 
 impl ConsensusGraph {
     // TODO: maybe return error for reserved address? Not sure where is the best
