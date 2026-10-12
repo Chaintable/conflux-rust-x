@@ -1,6 +1,6 @@
 //! Uploads spooled blocks to S3 and announces them on Kafka in production
 //! order, like the Go pipeline `PushProcessor` and the `etl` of
-//! background-tracer.
+//! background-tracer. Without Kafka the blocks are only uploaded.
 
 use crate::{
     chain::{
@@ -33,6 +33,11 @@ pub struct UploadConfig {
     pub region: String,
     pub nodex_bucket: String,
     pub chain_table_bucket: String,
+    pub kafka: Option<KafkaConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct KafkaConfig {
     pub brokers: String,
     pub topic: String,
 }
@@ -41,7 +46,7 @@ pub struct Uploader {
     spool: Arc<Spool>,
     chain: Arc<Mutex<AnnouncedChain>>,
     s3: S3Client,
-    producer: FutureProducer,
+    producer: Option<FutureProducer>,
     config: UploadConfig,
     /// `<chain_id>` or `<chain_id>/<version>`.
     prefix: String,
@@ -56,13 +61,18 @@ impl Uploader {
             .region(aws_config::Region::new(config.region.clone()))
             .load()
             .await;
-        let producer = ClientConfig::new()
-            .set("bootstrap.servers", &config.brokers)
-            .set("message.timeout.ms", "10000")
-            .set("acks", "all")
-            .set("enable.idempotence", "true")
-            .create::<FutureProducer>()
-            .map_err(|e| format!("create kafka producer: {}", e))?;
+        let producer = match &config.kafka {
+            Some(kafka) => Some(
+                ClientConfig::new()
+                    .set("bootstrap.servers", &kafka.brokers)
+                    .set("message.timeout.ms", "10000")
+                    .set("acks", "all")
+                    .set("enable.idempotence", "true")
+                    .create::<FutureProducer>()
+                    .map_err(|e| format!("create kafka producer: {}", e))?,
+            ),
+            None => None,
+        };
         Ok(Self {
             spool,
             chain,
@@ -75,8 +85,11 @@ impl Uploader {
 
     /// Rebuilds the announced chain from the last Kafka messages.
     pub fn resume_from_kafka(&self, max_messages: i64) -> Result<(), String> {
+        let Some(kafka) = &self.config.kafka else {
+            return Ok(());
+        };
         let consumer: BaseConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &self.config.brokers)
+            .set("bootstrap.servers", &kafka.brokers)
             .set("group.id", format!("debank-pipeline-{}", self.prefix))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "true")
@@ -84,15 +97,11 @@ impl Uploader {
             .map_err(|e| format!("create kafka consumer: {}", e))?;
         let partition = 0;
         let (low, high) = consumer
-            .fetch_watermarks(
-                &self.config.topic,
-                partition,
-                Duration::from_secs(10),
-            )
+            .fetch_watermarks(&kafka.topic, partition, Duration::from_secs(10))
             .map_err(|e| format!("fetch kafka watermarks: {}", e))?;
         info!(
             "debank pipeline: kafka topic {} offsets {}..{}",
-            self.config.topic, low, high
+            kafka.topic, low, high
         );
         if high <= low {
             return Ok(());
@@ -100,7 +109,7 @@ impl Uploader {
         let start = (high - max_messages).max(low);
         let mut tpl = TopicPartitionList::new();
         tpl.add_partition_offset(
-            &self.config.topic,
+            &kafka.topic,
             partition,
             Offset::Offset(start),
         )
@@ -153,6 +162,9 @@ impl Uploader {
         if entries.is_empty() {
             return Ok(0);
         }
+        let Some(producer) = &self.producer else {
+            return self.upload_only(entries).await;
+        };
 
         // Plan on a copy in production order; the shared chain only moves
         // once Kafka acknowledged the announcement.
@@ -200,7 +212,7 @@ impl Uploader {
             }
         }
         for notification in &notifications {
-            self.announce(notification).await;
+            self.announce(producer, notification).await;
             self.chain.lock().apply(notification);
         }
         for (entry, _, _) in &planned {
@@ -214,6 +226,28 @@ impl Uploader {
             );
         }
         Ok(planned.len())
+    }
+
+    /// Uploads the blocks, forks included, without announcing them.
+    async fn upload_only(
+        &self, entries: Vec<SpoolEntry>,
+    ) -> Result<usize, String> {
+        let records = entries
+            .iter()
+            .map(|e| self.spool.read(e))
+            .collect::<Result<Vec<_>, _>>()?;
+        futures::future::join_all(records.iter().map(|r| self.upload(r))).await;
+        for entry in &entries {
+            self.spool.remove(entry)?;
+        }
+        let last = records.last().expect("not empty");
+        info!(
+            "debank pipeline: uploaded {} blocks up to {} {:?}",
+            records.len(),
+            last.number,
+            last.hash
+        );
+        Ok(entries.len())
     }
 
     async fn upload(&self, record: &SpoolRecord) {
@@ -285,14 +319,17 @@ impl Uploader {
     }
 
     /// Retries until Kafka acknowledges the notification.
-    async fn announce(&self, notification: &BlockChangeNotification) {
+    async fn announce(
+        &self, producer: &FutureProducer,
+        notification: &BlockChangeNotification,
+    ) {
         let payload =
             gzip(&serde_json::to_vec(notification).expect("serializable"));
         loop {
-            let record = FutureRecord::to(&self.config.topic)
-                .key("NewBlock")
-                .payload(&payload);
-            match self.producer.send(record, Duration::from_secs(10)).await {
+            let topic = &self.config.kafka.as_ref().expect("announcing").topic;
+            let record =
+                FutureRecord::to(topic).key("NewBlock").payload(&payload);
+            match producer.send(record, Duration::from_secs(10)).await {
                 Ok(_) => return,
                 Err((e, _)) => {
                     warn!(

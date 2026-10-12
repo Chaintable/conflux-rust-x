@@ -63,6 +63,12 @@ impl DebankPipeline {
 
         match config.upload.clone() {
             Some(upload) => {
+                if upload.kafka.is_none() {
+                    warn!(
+                        "debank pipeline: no Kafka configured, produced \
+                         blocks are uploaded to S3 but not announced"
+                    );
+                }
                 let (ready_tx, ready_rx) = std::sync::mpsc::channel();
                 let spool = spool.clone();
                 let chain = chain.clone();

@@ -786,30 +786,39 @@ fn debank_pipeline(
     let Some(start_epoch) = raw.debank_pipeline_start_epoch else {
         return Ok(None);
     };
+    let kafka = match (&raw.debank_pipeline_brokers, &raw.debank_pipeline_topic)
+    {
+        (Some(brokers), Some(topic)) => {
+            Some(cfx_debank_pipeline::uploader::KafkaConfig {
+                brokers: brokers.clone(),
+                topic: topic.clone(),
+            })
+        }
+        (None, None) => None,
+        _ => {
+            return Err(
+                "debank_pipeline_{brokers,topic} must be set together".into()
+            )
+        }
+    };
     let upload = match (
         &raw.debank_pipeline_region,
         &raw.debank_pipeline_nodex_bucket,
         &raw.debank_pipeline_chain_table_bucket,
-        &raw.debank_pipeline_brokers,
-        &raw.debank_pipeline_topic,
     ) {
-        (
-            Some(region),
-            Some(nodex),
-            Some(chain_table),
-            Some(brokers),
-            Some(topic),
-        ) => Some(cfx_debank_pipeline::uploader::UploadConfig {
-            region: region.clone(),
-            nodex_bucket: nodex.clone(),
-            chain_table_bucket: chain_table.clone(),
-            brokers: brokers.clone(),
-            topic: topic.clone(),
-        }),
-        (None, None, None, None, None) => None,
+        (Some(region), Some(nodex), Some(chain_table)) => {
+            Some(cfx_debank_pipeline::uploader::UploadConfig {
+                region: region.clone(),
+                nodex_bucket: nodex.clone(),
+                chain_table_bucket: chain_table.clone(),
+                kafka,
+            })
+        }
+        (None, None, None) if kafka.is_none() => None,
         _ => {
             return Err("debank_pipeline_{region,nodex_bucket,\
-                chain_table_bucket,brokers,topic} must be set together"
+                chain_table_bucket} must be set together, and are required \
+                by debank_pipeline_{brokers,topic}"
                 .into())
         }
     };
