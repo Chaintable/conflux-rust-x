@@ -22,6 +22,20 @@ use rayon::prelude::*;
 use std::{cmp::max, collections::HashSet, sync::Arc};
 
 use super::super::ConsensusGraph;
+use crate::consensus::consensus_inner::consensus_executor::epoch_execution::DebankTxRawTrace;
+use cfx_executor::state::debank_diff::DebankStateDiff;
+
+/// Output of re-executing an epoch for `trace_debankBlock`.
+pub struct DebankEpochTrace {
+    /// Call trees of the executed transactions, in execution order.
+    pub traces: Vec<DebankTxRawTrace>,
+    /// eSpace accounts changed by the epoch.
+    pub state_diff: DebankStateDiff,
+    /// State root hash after the epoch.
+    pub state_root: H256,
+    /// State root hash after the parent epoch.
+    pub parent_state_root: H256,
+}
 
 impl ConsensusGraph {
     // TODO: maybe return error for reserved address? Not sure where is the best
@@ -764,55 +778,70 @@ impl ConsensusGraph {
         )
     }
 
+    /// Re-executes an epoch to collect the call trees of its transactions and
+    /// the eSpace state diff for `trace_debankBlock`.
+    ///
+    /// `pivot_hash` pins the epoch so that the result is consistent with the
+    /// phantom block the caller built.
     pub fn collect_epoch_debank_trace(
-        &self, epoch_num: u64,
-    ) -> CoreResult<(
-        Vec<
-            crate::consensus::consensus_inner::consensus_executor::epoch_execution::DebankTxRawTrace,
-        >,
-        cfx_executor::state::debank_diff::DebankStateDiff,
-    )> {
+        &self, epoch_num: u64, pivot_hash: H256,
+    ) -> CoreResult<DebankEpochTrace> {
         let epoch = EpochNumber::Number(epoch_num);
         self.validate_stated_epoch(&epoch)?;
 
-        let epoch_block_hashes = if let Ok(v) =
-            self.get_block_hashes_by_epoch(epoch)
-        {
-            v
-        } else {
-            bail!("cannot get block hashes in the specified epoch, maybe it does not exist?");
+        let epoch_block_hashes = match self.get_block_hashes_by_epoch(epoch) {
+            Ok(v) => v,
+            Err(_) => bail!("cannot get block hashes in the specified epoch, maybe it does not exist?"),
         };
+        if epoch_block_hashes.last() != Some(&pivot_hash) {
+            bail!("pivot chain changed while tracing epoch {}", epoch_num);
+        }
 
         let blocks = match self.data_man.blocks_by_hash_list(
             &epoch_block_hashes,
             true, /* update_cache */
         ) {
             Some(b) => b,
-            None => {
-                bail!("blocks not found or pruned for the specified epoch");
-            }
+            None => bail!("blocks not found or pruned for the specified epoch"),
         };
 
-        let pivot_block = match blocks.last() {
-            Some(b) => b,
-            None => {
-                bail!("empty epoch");
-            }
-        };
-
+        let pivot_block = blocks.last().expect("checked above");
         let height = pivot_block.block_header.height();
         if height == 0 {
             bail!("cannot collect debank traces for genesis block");
         }
+        let parent_pivot_hash = *pivot_block.block_header.parent_hash();
 
-        let parent_pivot_block_hash = pivot_block.block_header.parent_hash();
-        let parent_epoch_num = height - 1;
+        let state_root = self.epoch_state_root_hash(&pivot_hash)?;
+        let parent_state_root =
+            self.epoch_state_root_hash(&parent_pivot_hash)?;
 
-        self.executor.collect_blocks_debank_trace(
-            *parent_pivot_block_hash,
-            parent_epoch_num,
+        let (traces, state_diff) = self.executor.collect_blocks_debank_trace(
+            parent_pivot_hash,
+            height - 1,
             &blocks,
-        )
+        )?;
+
+        Ok(DebankEpochTrace {
+            traces,
+            state_diff,
+            state_root,
+            parent_state_root,
+        })
+    }
+
+    /// The hash of the state root after executing the epoch `pivot_hash`.
+    pub fn epoch_state_root_hash(&self, pivot_hash: &H256) -> CoreResult<H256> {
+        match self
+            .data_man
+            .get_epoch_execution_commitment_with_db(pivot_hash)
+        {
+            Some(c) => Ok(c.state_root_with_aux_info.aux_info.state_root_hash),
+            None => bail!(
+                "execution commitment of epoch {:?} not found",
+                pivot_hash
+            ),
+        }
     }
 
     fn earliest_epoch_for_log_filter(&self) -> u64 {

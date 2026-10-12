@@ -1767,8 +1767,7 @@ impl ConsensusExecutionHandler {
             Some(virtual_call),
         )?;
 
-        // Extract state diff from the modified state
-        let state_diff = state.extract_debank_state_diff();
+        let state_diff = state.extract_debank_state_diff(Space::Ethereum)?;
 
         Ok((answer, state_diff))
     }

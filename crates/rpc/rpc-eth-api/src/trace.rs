@@ -1,8 +1,8 @@
 use alloy_primitives::map::HashSet;
 use cfx_rpc_eth_types::{
-    debank::DebankOutPut, BlockId, BlockOverrides, Index, LocalizedSetAuthTrace,
-    LocalizedTrace, RpcStateOverride, TraceFilter, TraceResults, TraceType,
-    TransactionRequest,
+    debank::DebankOutPut, BlockId, BlockOverrides, Index,
+    LocalizedSetAuthTrace, LocalizedTrace, RpcStateOverride, TraceFilter,
+    TraceResults, TraceType, TransactionRequest,
 };
 use cfx_types::H256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};

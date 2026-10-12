@@ -1,112 +1,112 @@
-//! Pipeline (Debank) types for `trace_debankBlock` RPC method.
+//! Types of the `trace_debankBlock` RPC output.
 //!
-//! These types mirror the Go Pipeline `types/` package and are used for the
-//! `trace_debankBlock` RPC output.
+//! They follow the Chaintable pipeline protocol
+//! (github.com/Chaintable/pipeline, `types/` and `docs/protocol.md`): the
+//! block file is JSON, the state diff is RLP and IDs are MD5 based.
 
+use crate::Header;
 use cfx_rpc_primitives::Bytes;
-use cfx_types::{H256, U256};
+use cfx_types::{H160, H256, U256};
 use md5::{Digest as Md5Digest, Md5};
 use num_bigint::BigUint;
 use rlp_derive::{RlpDecodable, RlpEncodable};
-use serde::{Deserialize, Serialize};
+use serde::{Serialize, Serializer};
 use sha1::Sha1;
 
-// ============================================================
-// State Diff Types (RLP-encoded for binary transmission)
-// ============================================================
-
-/// Complete state diff for a block.
-#[derive(Debug, Clone, Default, RlpEncodable, RlpDecodable)]
+/// State changes of a block, keyed by hashed addresses and slots.
+#[derive(Debug, Clone, Default, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct BlockStorageDiff {
+    /// State root after the block.
     pub hash: H256,
+    /// State root before the block.
     pub parent_hash: H256,
     pub new_accounts: Vec<NewAccount>,
+    /// `keccak(address)` of the deleted accounts.
     pub deleted_accounts: Vec<H256>,
-    pub storage_diff: Vec<AccountStorageDiff>,
+    pub storage_diffs: Vec<AccountStorageDiff>,
     pub new_codes: Vec<NewCode>,
 }
 
-/// A new account created in this block.
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+/// An account created or updated in the block.
+#[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct NewAccount {
-    pub address_hash: H256,
+    /// `keccak(address)`
+    pub address: H256,
     pub balance: U256,
     pub nonce: u64,
     pub code_hash: H256,
 }
 
-/// New contract code deployed in this block.
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+#[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct NewCode {
     pub code_hash: H256,
     pub code: Vec<u8>,
 }
 
-/// Storage diff for a single account.
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+#[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct AccountStorageDiff {
-    pub address_hash: H256,
-    pub values: Vec<IndexValuePair>,
+    /// `keccak(address)`
+    pub address: H256,
+    pub diffs: Vec<IndexValuePair>,
 }
 
-/// A single storage slot change.
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+#[derive(Debug, Clone, PartialEq, RlpEncodable, RlpDecodable)]
 pub struct IndexValuePair {
+    /// `keccak(slot)`
     pub index: H256,
-    pub value: Vec<u8>,
+    /// Zero means the slot is deleted.
+    pub value: U256,
 }
 
-// ============================================================
-// Block File Types (JSON-serialized for RPC output)
-// ============================================================
-
-/// Debank block metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DebankBlock {
     pub id: String,
     pub height: u64,
     pub parent_id: String,
-    pub base_fee_per_gas: u64,
+    pub base_fee_per_gas: u128,
     pub miner: String,
-    pub gas_limit: u64,
-    pub gas_used: u64,
+    pub gas_limit: u128,
+    pub gas_used: u128,
     pub timestamp: u64,
+    /// Unix milliseconds.
     pub process_start_timestamp: i64,
 }
 
-/// Debank transaction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DebankTransaction {
     pub id: String,
     pub from_addr: String,
+    /// The created contract address for contract creations.
     pub to_addr: String,
-    pub gas_limit: u64,
-    pub gas_price: u64,
-    pub gas_used: u64,
+    pub gas_limit: u128,
+    pub gas_price: u128,
+    pub gas_used: u128,
     pub status: bool,
-    pub max_fee_per_gas: u64,
-    pub max_priority_fee_per_gas: u64,
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
     pub input: Bytes,
-    pub nonce: u64,
+    pub nonce: u128,
     pub idx: i64,
-    #[serde(serialize_with = "serialize_u256_hex")]
+    #[serde(serialize_with = "serialize_hex_big")]
     pub value: U256,
 }
 
-/// Debank trace (call/create/suicide).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DebankTrace {
     pub id: String,
     pub from_addr: String,
-    pub gas_limit: u64,
+    pub gas_limit: u128,
     pub input: Bytes,
     pub to_addr: String,
-    #[serde(serialize_with = "serialize_u256_hex")]
+    #[serde(serialize_with = "serialize_hex_big")]
     pub value: U256,
-    pub gas_used: u64,
+    pub gas_used: u128,
     pub output: Bytes,
+    /// `call`, `create`, `suicide` or `empty`.
     #[serde(rename = "type")]
     pub call_create_type: String,
+    /// `call`, `delegatecall`, `staticcall` or `callcode`; empty unless
+    /// `type` is `call`.
     pub call_type: String,
     pub tx_id: String,
     pub parent_trace_id: String,
@@ -115,25 +115,26 @@ pub struct DebankTrace {
     pub storage_change: bool,
     pub subtraces: i64,
     pub trace_address: Vec<i64>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub error: String,
 }
 
-/// Debank event log.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct DebankEvent {
     pub id: String,
     pub contract_id: String,
+    /// `topics[0]`, empty for anonymous logs.
     pub selector: String,
-    pub topics: Vec<String>,
+    /// `topics[1..]`, `null` when the log has no topic.
+    pub topics: Option<Vec<String>>,
     pub data: Bytes,
     pub parent_trace_id: String,
     pub pos_in_parent_trace: i64,
+    /// Block level log index; 0 for error events.
     pub idx: i64,
 }
 
-/// Block file containing all debank data for one block.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct BlockFile {
     pub block: DebankBlock,
     pub txs: Vec<DebankTransaction>,
@@ -145,68 +146,27 @@ pub struct BlockFile {
 }
 
 impl BlockFile {
-    /// Compute block validation from the block file.
-    pub fn validation(&self) -> BlockValidation {
-        let mut ids = Vec::new();
-        ids.push(self.block.id.clone());
-        for tx in &self.txs {
-            ids.push(tx.id.clone());
-        }
-        for event in &self.events {
-            ids.push(event.id.clone());
-        }
-        for trace in &self.traces {
-            ids.push(trace.id.clone());
-        }
-        for event in &self.error_events {
-            ids.push(event.id.clone());
-        }
-        for trace in &self.error_traces {
-            ids.push(trace.id.clone());
-        }
-
-        BlockValidation {
-            validation_hash: calc_validation_hash(&ids),
-            is_fork: false,
-            txs_count: self.txs.len(),
-            events_count: self.events.len(),
-            traces_count: self.traces.len(),
-            error_events_count: self.error_events.len(),
-            error_traces_count: self.error_traces.len(),
-            storage_contracts_count: self.storage_contracts.len(),
-        }
+    /// Matches Go `BlockFile.Validation().ValidationHash`: error events and
+    /// error traces are not included.
+    pub fn validation_hash(&self) -> i64 {
+        let ids = std::iter::once(&self.block.id)
+            .chain(self.txs.iter().map(|tx| &tx.id))
+            .chain(self.events.iter().map(|e| &e.id))
+            .chain(self.traces.iter().map(|t| &t.id));
+        calc_validation_hash(ids)
     }
 }
 
-/// Block validation metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlockValidation {
-    pub validation_hash: i64,
-    pub is_fork: bool,
-    pub txs_count: usize,
-    pub events_count: usize,
-    pub traces_count: usize,
-    pub error_events_count: usize,
-    pub error_traces_count: usize,
-    pub storage_contracts_count: usize,
-}
-
-/// Final RPC output for `trace_debankBlock`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DebankOutPut {
     pub block_file: BlockFile,
-    pub header: serde_json::Value,
-    pub state_diff: String,
+    pub header: Header,
+    /// RLP encoded [`BlockStorageDiff`].
+    pub state_diff: Bytes,
     pub validation_hash: i64,
 }
 
-// ============================================================
-// ID Generation (MD5, matching Go's util.ToHash)
-// ============================================================
-
-/// Generate a debank ID by MD5 hashing the concatenated args.
-///
-/// Matches Go's `util.ToHash(args ...string)`.
+/// Matches Go `util.ToHash`: hex encoded MD5 of the concatenated args.
 pub fn debank_id(args: &[&str]) -> String {
     let mut hasher = Md5::new();
     for arg in args {
@@ -215,64 +175,27 @@ pub fn debank_id(args: &[&str]) -> String {
     hex::encode(hasher.finalize())
 }
 
-// ============================================================
-// Validation Hash (SHA1, matching Go's CalcValidationHash)
-// ============================================================
-
-/// Calculate the validation hash from a list of IDs.
-///
-/// Matches Go's `types.CalcValidationHash(ids []string)`:
-/// - SHA1 hash each ID
-/// - Sum all hashes as big integers
-/// - Take the last 6 decimal digits as i64
-pub fn calc_validation_hash(ids: &[String]) -> i64 {
-    let mut sha1_sum = BigUint::from(0u64);
+/// Matches Go `types.CalcValidationHash`: the last 6 decimal digits of the
+/// sum of the SHA1 of each id.
+pub fn calc_validation_hash<'a>(ids: impl Iterator<Item = &'a String>) -> i64 {
+    let mut sum = BigUint::from(0u64);
     for id in ids {
-        let mut hasher = Sha1::new();
-        hasher.update(id.as_bytes());
-        let hash = hex::encode(hasher.finalize());
-        if let Some(hash_int) = BigUint::parse_bytes(hash.as_bytes(), 16) {
-            sha1_sum += hash_int;
-        }
+        let digest = Sha1::digest(id.as_bytes());
+        sum += BigUint::from_bytes_be(&digest);
     }
-    let s = sha1_sum.to_string();
-    let last6 = if s.len() >= 6 {
-        &s[s.len() - 6..]
-    } else {
-        &s
-    };
-    last6.parse::<i64>().unwrap_or(0)
+    let s = sum.to_string();
+    s[s.len().saturating_sub(6)..].parse().unwrap_or(0)
 }
 
-// ============================================================
-// Serialization Helpers
-// ============================================================
+pub fn format_address(address: &H160) -> String { format!("{:?}", address) }
 
-/// Serialize U256 as a hex string with "0x" prefix (matching Go's
-/// hexutil.Big).
-fn serialize_u256_hex<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
-where S: serde::Serializer {
-    if value.is_zero() {
-        serializer.serialize_str("0x0")
-    } else {
-        serializer.serialize_str(&format!("{:#x}", value))
-    }
-}
+pub fn format_hash(hash: &H256) -> String { format!("{:?}", hash) }
 
-/// Format a cfx_types::H160 address as lowercase hex with "0x" prefix.
-pub fn format_address(addr: &cfx_types::H160) -> String {
-    format!("0x{}", hex::encode(addr.as_bytes()))
-}
-
-/// Format a 20-byte slice as lowercase hex address with "0x" prefix.
-/// Use this for alloy_primitives::Address or any 20-byte address.
-pub fn format_address_bytes(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
-}
-
-/// Format a hash as lowercase hex with "0x" prefix.
-pub fn format_hash(hash: &H256) -> String {
-    format!("0x{}", hex::encode(hash.as_bytes()))
+/// Serializes like Go `hexutil.Big`.
+fn serialize_hex_big<S: Serializer>(
+    value: &U256, serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&format!("{:#x}", value))
 }
 
 #[cfg(test)]
@@ -280,25 +203,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_debank_id() {
-        let id = debank_id(&["hello", "world"]);
-        // MD5 of "helloworld"
-        assert_eq!(id.len(), 32);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    fn validation_hash_matches_go() {
+        // pipeline types/block_file_test.go
+        let file = BlockFile {
+            block: DebankBlock {
+                id: "abcd".into(),
+                ..Default::default()
+            },
+            txs: vec![DebankTransaction {
+                id: "efgh".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(file.validation_hash(), 217265);
     }
 
     #[test]
-    fn test_calc_validation_hash() {
-        let ids = vec!["abc".to_string(), "def".to_string()];
-        let hash = calc_validation_hash(&ids);
-        assert!(hash >= 0);
-        assert!(hash < 1_000_000); // at most 6 digits
+    fn debank_id_is_md5_of_concat() {
+        assert_eq!(
+            debank_id(&["hello", "world"]),
+            "fc5e038d38a57032085441e7fe7010b0"
+        );
     }
 
     #[test]
-    fn test_empty_validation_hash() {
-        let ids: Vec<String> = vec![];
-        let hash = calc_validation_hash(&ids);
-        assert_eq!(hash, 0);
+    fn formats_lowercase_hex() {
+        let address: H160 = "0x5BF92508B1935488B8B517E32BA473566DA6CF96"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            format_address(&address),
+            "0x5bf92508b1935488b8b517e32ba473566da6cf96"
+        );
+        assert_eq!(format!("{:#x}", U256::zero()), "0x0");
+    }
+
+    #[test]
+    fn state_diff_rlp_round_trip() {
+        let diff = BlockStorageDiff {
+            hash: H256::repeat_byte(1),
+            parent_hash: H256::repeat_byte(2),
+            new_accounts: vec![NewAccount {
+                address: H256::repeat_byte(3),
+                balance: U256::from(10),
+                nonce: 1,
+                code_hash: H256::repeat_byte(4),
+            }],
+            deleted_accounts: vec![H256::repeat_byte(5)],
+            storage_diffs: vec![AccountStorageDiff {
+                address: H256::repeat_byte(3),
+                diffs: vec![IndexValuePair {
+                    index: H256::repeat_byte(6),
+                    value: U256::zero(),
+                }],
+            }],
+            new_codes: vec![NewCode {
+                code_hash: H256::repeat_byte(4),
+                code: vec![0x60, 0x00],
+            }],
+        };
+        let encoded = rlp::encode(&diff);
+        assert_eq!(rlp::decode::<BlockStorageDiff>(&encoded).unwrap(), diff);
     }
 }

@@ -1,9 +1,11 @@
 pub mod access_list;
+pub mod debank_tracer;
 pub mod exec_tracer;
 pub mod gasman;
 mod utils;
 
 use access_list::AccessListInspector;
+use debank_tracer::DebankTracer;
 use exec_tracer::ExecTracer;
 use gasman::GasMan;
 
@@ -26,6 +28,7 @@ pub struct Observer {
     pub gas_man: Option<GasMan>,
     pub geth_tracer: Option<GethTracer>,
     pub access_list_inspector: Option<AccessListInspector>,
+    pub debank_tracer: Option<DebankTracer>,
 }
 
 impl Observer {
@@ -35,6 +38,7 @@ impl Observer {
             gas_man: None,
             geth_tracer: None,
             access_list_inspector: None,
+            debank_tracer: None,
         }
     }
 
@@ -44,6 +48,7 @@ impl Observer {
             gas_man: None,
             geth_tracer: None,
             access_list_inspector: None,
+            debank_tracer: None,
         }
     }
 
@@ -53,6 +58,7 @@ impl Observer {
             gas_man: Some(GasMan::default()),
             geth_tracer: None,
             access_list_inspector: None,
+            debank_tracer: None,
         }
     }
 
@@ -65,6 +71,7 @@ impl Observer {
             gas_man: None,
             geth_tracer: Some(GethTracer::new(tx_exec_context, machine, opts)),
             access_list_inspector: None,
+            debank_tracer: None,
         }
     }
 
@@ -79,6 +86,7 @@ impl Observer {
                 access_list,
                 excludes,
             )),
+            debank_tracer: None,
         }
     }
 }

@@ -3,9 +3,7 @@ use std::{collections::BTreeSet, convert::From, sync::Arc};
 
 use alloy_rpc_types_trace::geth::GethDebugTracingOptions;
 use cfx_parameters::genesis::GENESIS_ACCOUNT_ADDRESS;
-use geth_tracer::{
-    CallTraceArena, GethTraceWithHash, GethTracer, TxExecContext,
-};
+use geth_tracer::{GethTraceWithHash, GethTracer, TxExecContext};
 use pow_types::StakingEvent;
 
 use cfx_statedb::{Error as DbErrorKind, Result as DbResult};
@@ -21,7 +19,10 @@ use crate::{
 };
 use cfx_execute_helper::{
     exec_tracer::TransactionExecTraces,
-    observer::Observer,
+    observer::{
+        debank_tracer::{DebankTracer, DebankTxTrace},
+        Observer,
+    },
     tx_outcome::{make_process_tx_outcome, ProcessTxOutcome},
 };
 use cfx_executor::{
@@ -47,12 +48,11 @@ pub struct GethTask<'a> {
     pub(super) answer: &'a mut Vec<GethTraceWithHash>,
 }
 
-/// Raw trace data for a single transaction (for debank).
+/// Call tree of a single executed transaction (for `trace_debankBlock`).
 pub struct DebankTxRawTrace {
     pub tx_hash: H256,
-    pub arena: CallTraceArena,
-    pub gas_used: u64,
     pub space: Space,
+    pub trace: DebankTxTrace,
 }
 
 pub struct DebankTask<'a> {
@@ -486,32 +486,7 @@ impl ConsensusExecutionHandler {
                 }
             }
             Some(VirtualCall::DebankTrace(_)) => {
-                let tx_gas_limit = transaction.gas_limit().as_u64();
-                // Create a GethTracer in debank mode: records logs, steps
-                // (for SSTORE detection), and excludes nothing.
-                let debank_opts = GethDebugTracingOptions {
-                    tracer: Some(BuiltInTracer(CallTracer)),
-                    tracer_config: alloy_rpc_types_trace::geth::GethDebugTracerConfig(
-                        serde_json::json!({"withLog": true}),
-                    ),
-                    config: Default::default(),
-                    timeout: None,
-                };
-                let mut tracer = GethTracer::new(
-                    TxExecContext {
-                        tx_gas_limit,
-                        block_height: block_context
-                            .epoch_context
-                            .pivot_block
-                            .block_header
-                            .height(),
-                        block_number: block_context.block_number,
-                    },
-                    Arc::clone(&self.machine),
-                    debank_opts,
-                );
-                tracer.debank_mode = true;
-                observer.geth_tracer = Some(tracer);
+                observer.debank_tracer = Some(DebankTracer::default());
             }
             None => {}
         }
@@ -713,12 +688,11 @@ impl BlockProcessRecorder {
             });
         }
 
-        if let Some(raw_trace) = r.debank_raw_trace {
+        if let Some(trace) = r.debank_trace {
             self.debank_raw_traces.push(DebankTxRawTrace {
                 tx_hash: tx.hash(),
-                arena: raw_trace.arena,
-                gas_used: raw_trace.gas_used,
                 space: tx.space(),
+                trace,
             });
         }
 
