@@ -378,6 +378,10 @@ build_config! {
         (print_memory_usage_period_s, (Option<u64>), None)
         (target_block_gas_limit, (u64), DEFAULT_TARGET_BLOCK_GAS_LIMIT)
         (executive_trace, (bool), false)
+        // Epochs below it are executed without recording block traces, e.g.
+        // the core space only history before eSpace when only eSpace traces
+        // are needed.
+        (executive_trace_start_epoch, (u64), 0)
         // Chaintable pipeline: produce the `trace_debankBlock` data of every
         // executed eSpace block from this epoch on and upload it to S3/Kafka.
         (debank_pipeline_start_epoch, (Option<u64>), None)
@@ -1236,6 +1240,9 @@ impl Configuration {
     pub fn execution_config(&self) -> ConsensusExecutionConfiguration {
         ConsensusExecutionConfiguration {
             executive_trace: self.raw_conf.executive_trace,
+            executive_trace_start_epoch: self
+                .raw_conf
+                .executive_trace_start_epoch,
             debank_live: None,
         }
     }

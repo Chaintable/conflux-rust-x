@@ -83,7 +83,9 @@ impl ConsensusExecutionHandler {
             base_gas_price.map_all(|x| state.burnt_gas_price(x));
         let context = EpochProcessContext {
             on_local_pivot,
-            executive_trace: self.config.executive_trace,
+            executive_trace: self
+                .config
+                .executive_trace_at(pivot_block.block_header.height()),
             dry_run,
             virtual_call,
             debank_trace: debank_traces.is_some(),
@@ -457,7 +459,7 @@ impl ConsensusExecutionHandler {
             GethDebugBuiltInTracerType::*, GethDebugTracerType::BuiltInTracer,
         };
 
-        let mut observer = if self.config.executive_trace {
+        let mut observer = if block_context.epoch_context.executive_trace {
             Observer::with_tracing()
         } else {
             Observer::with_no_tracing()
