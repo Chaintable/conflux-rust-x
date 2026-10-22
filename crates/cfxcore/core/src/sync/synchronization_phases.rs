@@ -13,7 +13,7 @@ use crate::{
     ConsensusGraph,
 };
 use cfx_internal_common::StateAvailabilityBoundary;
-use cfx_parameters::sync::CATCH_UP_EPOCH_LAG_THRESHOLD;
+use cfx_parameters::sync::catch_up_epoch_lag_threshold;
 use network::NetworkContext;
 use parking_lot::RwLock;
 use std::{
@@ -518,7 +518,7 @@ impl SynchronizationPhaseTrait for CatchUpSyncBlockPhase {
         // FIXME: OK, what if the chain height is close, or even local height is
         // FIXME: larger, but the chain forked earlier very far away?
         if self.graph.consensus.best_epoch_number()
-            + CATCH_UP_EPOCH_LAG_THRESHOLD
+            + catch_up_epoch_lag_threshold()
             >= median_epoch
         {
             sync_handler.graph.consensus.enter_normal_phase();

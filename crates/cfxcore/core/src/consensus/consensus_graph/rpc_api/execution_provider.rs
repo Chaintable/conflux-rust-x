@@ -147,4 +147,21 @@ impl ConsensusGraph {
             evm_overrides,
         )
     }
+
+    pub fn call_many_virtual(
+        &self, tx_list: Vec<SignedTransaction>, epoch: EpochNumber,
+        requests: Vec<EstimateRequest>,
+    ) -> CoreResult<Vec<CoreResult<(ExecutionOutcome, EstimateExt)>>> {
+        // only allow to call against stated epoch
+        self.validate_stated_epoch(&epoch)?;
+        let (epoch_id, epoch_size) = if let Ok(v) =
+            self.get_block_hashes_by_epoch(epoch)
+        {
+            (v.last().expect("pivot block always exist").clone(), v.len())
+        } else {
+            bail!("cannot get block hashes in the specified epoch, maybe it does not exist?");
+        };
+        self.executor
+            .call_many_virtual(tx_list, &epoch_id, epoch_size, requests)
+    }
 }

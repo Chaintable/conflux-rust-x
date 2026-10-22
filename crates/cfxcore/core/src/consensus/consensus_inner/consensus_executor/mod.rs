@@ -658,6 +658,18 @@ impl ConsensusExecutor {
         )
     }
 
+    pub fn call_many_virtual(
+        &self, tx_list: Vec<SignedTransaction>, epoch_id: &H256,
+        epoch_size: usize, request_list: Vec<EstimateRequest>,
+    ) -> CoreResult<Vec<CoreResult<(ExecutionOutcome, EstimateExt)>>> {
+        self.handler.call_many_virtual(
+            tx_list,
+            epoch_id,
+            epoch_size,
+            request_list,
+        )
+    }
+
     pub fn collect_blocks_geth_trace(
         &self, epoch_id: H256, epoch_num: u64, blocks: &Vec<Arc<Block>>,
         opts: GethDebugTracingOptions, tx_hash: Option<H256>,
@@ -1871,6 +1883,102 @@ impl ConsensusExecutionHandler {
         let r = ex.transact_virtual(tx.clone(), request);
         trace!("Execution result {:?}", r);
         Ok(r?)
+    }
+
+    pub fn call_many_virtual(
+        &self, tx_list: Vec<SignedTransaction>, epoch_id: &H256,
+        epoch_size: usize, request_list: Vec<EstimateRequest>,
+    ) -> CoreResult<Vec<CoreResult<(ExecutionOutcome, EstimateExt)>>> {
+        let mut res_list = Vec::new();
+
+        let best_block_header = self.data_man.block_header_by_hash(epoch_id);
+        if best_block_header.is_none() {
+            bail!("invalid epoch id");
+        }
+        let best_block_header = best_block_header.unwrap();
+        let block_height = best_block_header.height() + 1;
+
+        let pos_id = best_block_header.pos_reference().as_ref();
+        let pos_view_number =
+            pos_id.and_then(|id| self.pos_verifier.get_pos_view(id));
+        let pivot_decision_epoch = pos_id
+            .and_then(|id| self.pos_verifier.get_pivot_decision(id))
+            .and_then(|hash| self.data_man.block_header_by_hash(&hash))
+            .map(|header| header.height());
+
+        let start_block_number = match self.data_man.get_epoch_execution_context(epoch_id) {
+            Some(v) => v.start_block_number + epoch_size as u64,
+            None => bail!("cannot obtain the execution context. Database is potentially corrupted!"),
+        };
+        let spec = self.machine.spec(start_block_number, block_height);
+        let transitions = &self.machine.params().transition_heights;
+
+        let state_space = Some(Space::Ethereum);
+        trace!("best_block_header: {:?}", best_block_header);
+        let time_stamp = best_block_header.timestamp();
+        let statedb = self.get_statedb_by_epoch_id_and_space(
+            epoch_id,
+            best_block_header.height(),
+            state_space,
+        )?;
+        let mut state = State::new(statedb)?;
+
+        let miner = H160::random();
+        let base_gas_price = best_block_header.base_price().unwrap_or_default();
+        let burnt_gas_price =
+            base_gas_price.map_all(|x| state.burnt_gas_price(x));
+
+        for i in 0..tx_list.len() {
+            let tx = tx_list[i].clone();
+            let res = invalid_params_check(
+                "tx",
+                self.verification_config.verify_transaction_common(
+                    &tx,
+                    AllChainID::fake_for_virtual(tx.chain_id().unwrap_or(1)),
+                    block_height,
+                    transitions,
+                    VerifyTxMode::Local(VerifyTxLocalMode::Full, &spec),
+                ),
+            );
+
+            if res.is_err() {
+                res_list.push(Err(res.unwrap_err().into()));
+                continue;
+            }
+
+            let env = Env {
+                chain_id: self.machine.params().chain_id_map(block_height),
+                number: start_block_number,
+                author: miner,
+                timestamp: time_stamp,
+                difficulty: Default::default(),
+                accumulated_gas_used: U256::zero(),
+                last_hash: epoch_id.clone(),
+                gas_limit: tx.gas().clone(),
+                epoch_height: block_height,
+                pos_view: pos_view_number,
+                finalized_epoch: pivot_decision_epoch,
+                transaction_epoch_bound: self
+                    .verification_config
+                    .transaction_epoch_bound,
+                base_gas_price,
+                burnt_gas_price,
+                transaction_hash: tx.hash(),
+                ..Default::default()
+            };
+
+            let spec = self.machine.spec(env.number, env.epoch_height);
+            let mut ex = EstimationContext::new(
+                &mut state,
+                &env,
+                self.machine.as_ref(),
+                &spec,
+            );
+            let r = ex.transact_virtual(tx.clone(), request_list[i].clone());
+            res_list.push(r.map_err(|e| e.into()));
+        }
+
+        Ok(res_list)
     }
 
     /// Execute transactions in the blocks to collect traces.

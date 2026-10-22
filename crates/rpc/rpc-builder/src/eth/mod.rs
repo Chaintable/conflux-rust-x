@@ -289,6 +289,11 @@ impl RpcRegistryInner {
                         );
                         ParityApi::new(eth_api).into_rpc().into()
                     }
+                    EthRpcModule::Pre => {
+                        PreApi::new(self.consensus.clone(), self.config.clone())
+                            .into_rpc()
+                            .into()
+                    }
                     EthRpcModule::Txpool => {
                         TxPoolApi::new(self.tx_pool.clone()).into_rpc().into()
                     }

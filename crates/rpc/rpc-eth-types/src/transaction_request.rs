@@ -108,13 +108,10 @@ impl TransactionRequest {
     ) -> Result<SignedTransaction, Error> {
         let request = self;
         let max_gas = max_gas.unwrap_or(DEFAULT_ETH_GAS_CALL_REQUEST.into());
+        // A gas above `max_gas` is allowed: DeBank's pre-execution calls
+        // (pre_traceMany, eth_multiCall, eth_call) send larger limits, as the
+        // v3.0.0-debank nodes accepted.
         let gas = request.gas.unwrap_or(max_gas);
-        if gas > max_gas {
-            return Err(Error::InvalidParams(
-                "gas".into(),
-                "specified gas is larger than max gas".to_string(),
-            ));
-        }
 
         let nonce = request.nonce.unwrap_or_default();
         let action =

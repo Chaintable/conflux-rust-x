@@ -1,8 +1,9 @@
 use cfx_rpc_eth_types::{
     AccessListResult, AccountPendingTransactions, Block, BlockId,
     BlockOverrides, Bundle, EthCallResponse, EthRpcLogFilter as Filter,
-    FeeHistory, Header, Log, Receipt, RpcStateOverride, SimulatePayload,
-    SimulatedBlock, StateContext, SyncStatus, Transaction, TransactionRequest,
+    FeeHistory, Header, Log, MultiCallResp, Receipt, RpcStateOverride,
+    SimulatePayload, SimulatedBlock, StateContext, SyncStatus, Transaction,
+    TransactionRequest,
 };
 use cfx_rpc_primitives::{Bytes, Index};
 use cfx_types::{Address, H256, H64, U256, U64};
@@ -363,4 +364,14 @@ pub trait EthApi {
         &self, address: Address, maybe_start_nonce: Option<U256>,
         maybe_limit: Option<U64>,
     ) -> RpcResult<AccountPendingTransactions>;
+
+    /// DeBank batch call: runs each request as an `eth_call` on the given
+    /// block. `0xeeee...eeee` is served as the native CFX token (balanceOf,
+    /// totalSupply, decimals, name, symbol).
+    #[method(name = "multiCall")]
+    async fn multicall(
+        &self, args: Vec<TransactionRequest>, num: Option<BlockId>,
+        fast_fail: Option<bool>, use_parallel: Option<bool>,
+        disable_cache: Option<bool>,
+    ) -> RpcResult<MultiCallResp>;
 }

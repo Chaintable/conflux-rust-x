@@ -740,7 +740,7 @@ impl Configuration {
             _ => {
                 if conf.sync_state_epoch_gap.is_none() {
                     conf.sync_state_epoch_gap =
-                        Some(CATCH_UP_EPOCH_LAG_THRESHOLD);
+                        Some(catch_up_epoch_lag_threshold());
                 }
             }
         }
