@@ -288,6 +288,11 @@ build_config! {
         (request_block_with_public, (bool), false)
         (send_tx_period_ms, (u64), 1300)
         (snapshot_candidate_request_timeout_ms, (u64), 10_000)
+        // Max epochs whose block hashes are requested but not yet received.
+        // Raise it when peers respond slowly and catching up is bound by it.
+        (sync_epoch_max_inflight, (u64), 300)
+        // Max blocks whose bodies are requested but not yet received.
+        (sync_block_max_inflight, (usize), 1000)
         (snapshot_chunk_request_timeout_ms, (u64), 30_000)
         (snapshot_manifest_request_timeout_ms, (u64), 30_000)
         (sync_expire_block_timeout_s, (u64), 7200)
@@ -987,6 +992,8 @@ impl Configuration {
                 .expect("set to genesis if none"),
             check_status_genesis: self.raw_conf.check_status_genesis,
             pos_started_as_voter: self.raw_conf.pos_started_as_voter,
+            sync_epoch_max_inflight: self.raw_conf.sync_epoch_max_inflight,
+            sync_block_max_inflight: self.raw_conf.sync_block_max_inflight,
         }
     }
 
