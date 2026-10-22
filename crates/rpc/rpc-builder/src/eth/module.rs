@@ -48,13 +48,14 @@ pub enum RpcModuleSelection {
 }
 
 impl RpcModuleSelection {
-    pub const EVM_MODULES: [EthRpcModule; 6] = [
+    pub const EVM_MODULES: [EthRpcModule; 7] = [
         EthRpcModule::Eth,
         EthRpcModule::PubSub,
         EthRpcModule::Net,
         EthRpcModule::Web3,
         EthRpcModule::Parity,
         EthRpcModule::Trace,
+        EthRpcModule::Pre,
     ];
     /// The standard modules to instantiate by default `eth`, `net`, `web3`
     pub const STANDARD_MODULES: [EthRpcModule; 3] =
@@ -276,6 +277,8 @@ pub enum EthRpcModule {
     Parity,
     /// pubsub
     PubSub,
+    /// `pre_` module (DeBank pre-execution)
+    Pre,
 }
 
 impl EthRpcModule {
@@ -320,6 +323,7 @@ impl FromStr for EthRpcModule {
             "rpc" => Self::Rpc,
             "parity" => Self::Parity,
             "pubsub" | "ethpubsub" => Self::PubSub,
+            "pre" | "ethpre" => Self::Pre,
             _ => return Err(ParseError::VariantNotFound),
         })
     }

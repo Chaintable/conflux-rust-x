@@ -148,6 +148,19 @@ pub mod sync {
     /// CATCH_UP_EPOCH_LAG_THRESHOLD behind the median of the epoch
     /// numbers of peers.
     pub const CATCH_UP_EPOCH_LAG_THRESHOLD: u64 = 20;
+
+    /// [`CATCH_UP_EPOCH_LAG_THRESHOLD`], overridable with the
+    /// `CATCH_UP_EPOCH_LAG_THRESHOLD` environment variable (read once). An
+    /// unparsable value falls back to the default.
+    pub fn catch_up_epoch_lag_threshold() -> u64 {
+        static VALUE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        *VALUE.get_or_init(|| {
+            std::env::var("CATCH_UP_EPOCH_LAG_THRESHOLD")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(CATCH_UP_EPOCH_LAG_THRESHOLD)
+        })
+    }
     /// This threshold controlling whether a node should request missing
     /// terminals from peers when the node is in catch-up mode.
     pub const REQUEST_TERMINAL_EPOCH_LAG_THRESHOLD: u64 = 40;

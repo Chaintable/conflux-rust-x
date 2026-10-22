@@ -10,9 +10,10 @@ use cfx_rpc_eth_api::EthApiServer;
 use cfx_rpc_eth_types::{
     AccessListResult, AccountPendingTransactions, Block, BlockId,
     BlockOverrides, Bundle, EthCallResponse, EthRpcLogFilter,
-    EthRpcLogFilter as Filter, FeeHistory, Header, Log, LogData, Receipt,
-    RpcStateOverride, SimulatePayload, SimulatedBlock, StateContext, SyncInfo,
-    SyncStatus, Transaction, TransactionRequest,
+    EthRpcLogFilter as Filter, FeeHistory, Header, Log, LogData, MultiCallResp,
+    MultiCallResult, MultiCallStats, Receipt, RpcStateOverride,
+    SimulatePayload, SimulatedBlock, StateContext, SyncInfo, SyncStatus,
+    Transaction, TransactionRequest,
 };
 use cfx_rpc_primitives::{Bytes, Index, U64 as HexU64};
 use cfx_rpc_utils::{
@@ -1395,5 +1396,139 @@ impl EthApiServer for EthApi {
             maybe_limit,
         )
         .map_err(|err| err.into())
+    }
+
+    async fn multicall(
+        &self, requests: Vec<TransactionRequest>,
+        block_number: Option<BlockId>, fast_fail: Option<bool>,
+        use_parallel: Option<bool>, disable_cache: Option<bool>,
+    ) -> RpcResult<MultiCallResp> {
+        Ok(self.multi_call(
+            requests,
+            block_number,
+            fast_fail,
+            use_parallel,
+            disable_cache,
+        ))
+    }
+}
+
+/// Address that `eth_multiCall` serves as the native token (CFX).
+const NATIVE_TOKEN_ADDRESS: H160 = H160([0xee; 20]);
+/// `-40000`: the request is malformed.
+const MULTICALL_ARG_ERROR: i32 = -40000;
+/// `-40014`: the call failed.
+const MULTICALL_EXEC_ERROR: i32 = -40014;
+
+impl EthApi {
+    /// `eth_multiCall`, as served by the v3.0.0-debank nodes. Each request is
+    /// an independent `eth_call` on `block_number`. `fast_fail` and
+    /// `use_parallel` are accepted for compatibility and have no effect.
+    fn multi_call(
+        &self, requests: Vec<TransactionRequest>,
+        block_number: Option<BlockId>, _fast_fail: Option<bool>,
+        _use_parallel: Option<bool>, disable_cache: Option<bool>,
+    ) -> MultiCallResp {
+        let results = requests
+            .into_iter()
+            .map(|request| self.multi_call_one(request, block_number.clone()))
+            .collect();
+        MultiCallResp {
+            results,
+            stats: MultiCallStats {
+                block_num: 0,
+                block_time: 0,
+                success: true,
+                cache_enabled: !disable_cache.unwrap_or(false),
+            },
+        }
+    }
+
+    fn multi_call_one(
+        &self, request: TransactionRequest, block_number: Option<BlockId>,
+    ) -> MultiCallResult {
+        let Some(to) = request.to else {
+            return MultiCallResult::default();
+        };
+        if to == NATIVE_TOKEN_ADDRESS {
+            return self.native_token_call(&request, block_number);
+        }
+        match self.tx_executor.exec_transaction(
+            request,
+            block_number,
+            None,
+            None,
+            false,
+        ) {
+            Ok((executed, _)) => multicall_ok(executed.output),
+            Err(e) => multicall_err(MULTICALL_EXEC_ERROR, e.to_string()),
+        }
+    }
+
+    /// ERC20 view calls on [`NATIVE_TOKEN_ADDRESS`], answered from the
+    /// account state: `balanceOf` returns the CFX balance, and `totalSupply`,
+    /// `decimals`, `name` and `symbol` return fixed values.
+    fn native_token_call(
+        &self, request: &TransactionRequest, block_number: Option<BlockId>,
+    ) -> MultiCallResult {
+        let input = request
+            .input
+            .clone()
+            .try_into_unique_input()
+            .unwrap_or_default();
+        let Some(input) = input else {
+            return multicall_err(MULTICALL_ARG_ERROR, "tx input missing");
+        };
+        if input.len() < 4 {
+            return multicall_err(
+                MULTICALL_ARG_ERROR,
+                "tx input less than 4 bytes",
+            );
+        }
+        let word = |v: U256| v.to_big_endian().to_vec();
+        match input[0..4] {
+            // balanceOf(address)
+            [0x70, 0xa0, 0x82, 0x31] => {
+                if input.len() < 36 {
+                    return multicall_err(MULTICALL_ARG_ERROR, "");
+                }
+                let user = Address::from_slice(&input[16..36]);
+                let balance =
+                    self.user_balance(user, block_number).unwrap_or_default();
+                multicall_ok(word(balance))
+            }
+            // totalSupply(): 1e18
+            [0x18, 0x16, 0x0d, 0xdd] => {
+                multicall_ok(word(U256::from(1_000_000_000_000_000_000u64)))
+            }
+            // decimals(): 18
+            [0x31, 0x3c, 0xe5, 0x67] => multicall_ok(word(U256::from(18))),
+            // name(), symbol(): ABI-encoded "CFX"
+            [0x06, 0xfd, 0xde, 0x03] | [0x95, 0xd8, 0x9b, 0x41] => {
+                let mut out = word(U256::from(0x20));
+                out.extend(word(U256::from(3)));
+                let mut text = [0u8; 32];
+                text[..3].copy_from_slice(b"CFX");
+                out.extend(text);
+                multicall_ok(out)
+            }
+            _ => multicall_ok(Vec::new()),
+        }
+    }
+}
+
+fn multicall_ok(output: Vec<u8>) -> MultiCallResult {
+    MultiCallResult {
+        code: 0,
+        result: output.into(),
+        ..Default::default()
+    }
+}
+
+fn multicall_err(code: i32, err: impl Into<String>) -> MultiCallResult {
+    MultiCallResult {
+        code,
+        err: err.into(),
+        ..Default::default()
     }
 }
