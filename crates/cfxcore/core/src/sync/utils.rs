@@ -279,6 +279,7 @@ pub fn initialize_synchronization_graph_with_data_manager(
         notifications.clone(),
         ConsensusExecutionConfiguration {
             executive_trace: false,
+            executive_trace_start_epoch: 0,
             debank_live: None,
         },
         verification_config.clone(),

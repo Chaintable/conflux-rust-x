@@ -288,6 +288,11 @@ build_config! {
         (request_block_with_public, (bool), false)
         (send_tx_period_ms, (u64), 1300)
         (snapshot_candidate_request_timeout_ms, (u64), 10_000)
+        // Max epochs whose block hashes are requested but not yet received.
+        // Raise it when peers respond slowly and catching up is bound by it.
+        (sync_epoch_max_inflight, (u64), 300)
+        // Max blocks whose bodies are requested but not yet received.
+        (sync_block_max_inflight, (usize), 1000)
         (snapshot_chunk_request_timeout_ms, (u64), 30_000)
         (snapshot_manifest_request_timeout_ms, (u64), 30_000)
         (sync_expire_block_timeout_s, (u64), 7200)
@@ -378,6 +383,10 @@ build_config! {
         (print_memory_usage_period_s, (Option<u64>), None)
         (target_block_gas_limit, (u64), DEFAULT_TARGET_BLOCK_GAS_LIMIT)
         (executive_trace, (bool), false)
+        // Epochs below it are executed without recording block traces, e.g.
+        // the core space only history before eSpace when only eSpace traces
+        // are needed.
+        (executive_trace_start_epoch, (u64), 0)
         // Chaintable pipeline: produce the `trace_debankBlock` data of every
         // executed eSpace block from this epoch on and upload it to S3/Kafka.
         (debank_pipeline_start_epoch, (Option<u64>), None)
@@ -984,6 +993,8 @@ impl Configuration {
                 .expect("set to genesis if none"),
             check_status_genesis: self.raw_conf.check_status_genesis,
             pos_started_as_voter: self.raw_conf.pos_started_as_voter,
+            sync_epoch_max_inflight: self.raw_conf.sync_epoch_max_inflight,
+            sync_block_max_inflight: self.raw_conf.sync_block_max_inflight,
         }
     }
 
@@ -1237,6 +1248,9 @@ impl Configuration {
     pub fn execution_config(&self) -> ConsensusExecutionConfiguration {
         ConsensusExecutionConfiguration {
             executive_trace: self.raw_conf.executive_trace,
+            executive_trace_start_epoch: self
+                .raw_conf
+                .executive_trace_start_epoch,
             debank_live: None,
         }
     }
