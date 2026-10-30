@@ -551,6 +551,30 @@ impl SnapshotKvDbSqlite {
         ))
     }
 
+    /// Applies the delta dumped in this snapshot to `mpt_db`, which must hold
+    /// the MPT of the parent snapshot, and returns the new root.
+    pub fn merge_dumped_delta_into_mpt(
+        &self, mpt_db: &mut SnapshotMptDbSqlite,
+    ) -> Result<MerkleHash> {
+        let mut set_keys_iter = self.dumped_delta_kv_set_keys_iterator()?;
+        let mut delete_keys_iter =
+            self.dumped_delta_kv_delete_keys_iterator()?;
+
+        mpt_db.start_transaction()?;
+        let mut mpt = mpt_db.open_snapshot_mpt_owned()?;
+        let mut mpt_merger =
+            MptMerger::new(None, &mut mpt as &mut dyn SnapshotMptTraitRw);
+        let root = mpt_merger.merge_insertion_deletion_separated(
+            delete_keys_iter.iter_range(&[], None)?.take(),
+            set_keys_iter.iter_range(&[], None)?.take(),
+            false,
+        )?;
+        drop(mpt_merger);
+        drop(mpt);
+        mpt_db.commit_transaction()?;
+        Ok(root)
+    }
+
     // FIXME: add rate limit.
     // FIXME: how to handle row_id, this should go to the merkle tree?
     pub fn dump_delta_mpt(

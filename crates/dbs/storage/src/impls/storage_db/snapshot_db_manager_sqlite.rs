@@ -1012,6 +1012,114 @@ impl SnapshotDbManagerSqlite {
             true
         }
     }
+
+    /// Rebuilds the latest MPT for `snapshot_epoch_id` when it holds the state
+    /// of another branch, which happens when the pivot chain switches across a
+    /// snapshot. The rebuild starts from the closest MPT backup on the branch
+    /// and replays the deltas kept in the snapshots after it. Each replayed
+    /// root must match the recorded one, otherwise nothing is changed.
+    fn rewind_latest_mpt_snapshot(
+        &self, snapshot_epoch_id: &EpochId,
+        snapshot_info_map_rwlock: &RwLock<PersistedSnapshotInfoMap>,
+    ) -> Result<()> {
+        let (latest_epoch_id, latest_height) = *self.latest_snapshot_id.read();
+        warn!(
+            "rewind latest mpt snapshot from {:?} at {} to {:?}",
+            latest_epoch_id, latest_height, snapshot_epoch_id
+        );
+
+        // The snapshots after the closest backup, newest first.
+        let mut replay = Vec::new();
+        let (backup_epoch_id, height) = {
+            let snapshot_info_map = snapshot_info_map_rwlock.read();
+            let height = snapshot_info_map
+                .get(snapshot_epoch_id)
+                .ok_or(Error::SnapshotNotFound)?
+                .height;
+            let mut epoch_id = *snapshot_epoch_id;
+            while !self.get_mpt_snapshot_db_path(&epoch_id).exists() {
+                let info = snapshot_info_map
+                    .get(&epoch_id)
+                    .ok_or(Error::SnapshotNotFound)?;
+                if info.parent_snapshot_epoch_id == NULL_EPOCH
+                    || self.is_mpt_table_in_current_db_for_epoch(
+                        info.parent_snapshot_height,
+                    )
+                {
+                    bail!(format!(
+                        "no mpt backup to rewind to {:?}",
+                        snapshot_epoch_id
+                    ));
+                }
+                replay.push((epoch_id, info.merkle_root));
+                epoch_id = info.parent_snapshot_epoch_id;
+            }
+            (epoch_id, height)
+        };
+
+        // Open the snapshots before taking the latest MPT, because a writer
+        // holds the open lock while it waits for the latest MPT.
+        let mut snapshots = Vec::with_capacity(replay.len());
+        for (epoch_id, merkle_root) in replay.into_iter().rev() {
+            let snapshot = {
+                let _open_lock = self.open_create_delete_lock.lock();
+                self.open_kv_snapshot_readonly(
+                    self.get_snapshot_db_path(&epoch_id),
+                    false,
+                )?
+            }
+            .ok_or(Error::SnapshotNotFound)?;
+            snapshots.push((epoch_id, merkle_root, snapshot));
+        }
+
+        let _latest_mpt_permit =
+            executor::block_on(self.latest_mpt_snapshot_semaphore.acquire())
+                .map_err(|_err| Error::SemaphoreAcquireError)?;
+        let _copy_lock = self.copying_mpt_snapshot.lock();
+
+        let temp_mpt_path = self.mpt_snapshot_path.join(
+            Self::SNAPSHOT_DB_SQLITE_DIR_PREFIX.to_string() + "rewind_temp",
+        );
+        if temp_mpt_path.exists() {
+            fs::remove_dir_all(&temp_mpt_path)?;
+        }
+        Self::try_copy_snapshot(
+            self.get_mpt_snapshot_db_path(&backup_epoch_id).as_path(),
+            temp_mpt_path.as_path(),
+            self.force_cow,
+        )?;
+        {
+            let mut mpt_db = SnapshotMptDbSqlite::open(
+                temp_mpt_path.as_path(),
+                /* readonly = */ false,
+                &Default::default(),
+                &Arc::new(Semaphore::new(1)),
+                None,
+            )?;
+            for (epoch_id, merkle_root, snapshot) in &snapshots {
+                let root = snapshot.merge_dumped_delta_into_mpt(&mut mpt_db)?;
+                if root != *merkle_root {
+                    bail!(format!(
+                        "rewind latest mpt snapshot: root of {:?} is {:?}, expected {:?}",
+                        epoch_id, root, merkle_root
+                    ));
+                }
+                info!("rewind latest mpt snapshot: replayed {:?}", epoch_id);
+            }
+        }
+
+        let latest_mpt_path = self.get_latest_mpt_snapshot_db_path();
+        if latest_mpt_path.exists() {
+            fs::remove_dir_all(&latest_mpt_path)?;
+        }
+        Self::rename_snapshot_db(&temp_mpt_path, &latest_mpt_path)?;
+        *self.latest_snapshot_id.write() = (*snapshot_epoch_id, height);
+        info!(
+            "rewind latest mpt snapshot: now at {:?} {} from backup {:?}",
+            snapshot_epoch_id, height, backup_epoch_id
+        );
+        Ok(())
+    }
 }
 
 impl SnapshotDbManagerTrait for SnapshotDbManagerSqlite {
@@ -1071,6 +1179,27 @@ impl SnapshotDbManagerTrait for SnapshotDbManagerSqlite {
 
         let mpt_table_in_current_db =
             self.is_mpt_table_in_current_db_for_epoch(new_epoch_height);
+
+        // The latest MPT is shared by all branches. If the pivot chain
+        // switched to a branch that does not extend it, rebuild it first.
+        if !recover_mpt_with_kv_snapshot_exist
+            && !mpt_table_in_current_db
+            && *old_snapshot_epoch_id != NULL_EPOCH
+            && !self.is_mpt_table_in_current_db_for_epoch(
+                in_progress_snapshot_info.parent_snapshot_height,
+            )
+        {
+            let latest_epoch_id = self.latest_snapshot_id.read().0;
+            if latest_epoch_id != *old_snapshot_epoch_id
+                && latest_epoch_id != snapshot_epoch_id
+            {
+                self.rewind_latest_mpt_snapshot(
+                    old_snapshot_epoch_id,
+                    snapshot_info_map_rwlock,
+                )?;
+            }
+        }
+
         let new_snapshot_root = if *old_snapshot_epoch_id == NULL_EPOCH {
             snapshot_mpt_db = if mpt_table_in_current_db {
                 None
