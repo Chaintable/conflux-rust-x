@@ -36,7 +36,7 @@ impl PersistedSnapshotInfoMap {
         &self.snapshot_info_map_by_epoch
     }
 
-    fn get(&self, epoch: &EpochId) -> Option<&SnapshotInfo> {
+    pub(crate) fn get(&self, epoch: &EpochId) -> Option<&SnapshotInfo> {
         self.snapshot_info_map_by_epoch.get(epoch)
     }
 

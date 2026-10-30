@@ -1000,7 +1000,7 @@ impl ConsensusExecutionHandler {
             &epoch_hash,
             &epoch_block_hashes,
             on_local_pivot,
-            self.config.executive_trace,
+            self.config.executive_trace_at(epoch_height),
             reward_execution_info,
             self.pos_verifier.as_ref(),
             evm_chain_id,
@@ -2117,6 +2117,15 @@ impl ConsensusExecutionHandler {
 
 pub struct ConsensusExecutionConfiguration {
     pub executive_trace: bool,
+    /// Epochs below it are executed without recording block traces.
+    pub executive_trace_start_epoch: u64,
     /// Receives the debank traces of executed epochs, see [`debank_live`].
     pub debank_live: Option<Arc<dyn DebankLiveSink>>,
+}
+
+impl ConsensusExecutionConfiguration {
+    /// Whether the block traces of the epoch at `epoch_height` are recorded.
+    pub fn executive_trace_at(&self, epoch_height: u64) -> bool {
+        self.executive_trace && epoch_height >= self.executive_trace_start_epoch
+    }
 }

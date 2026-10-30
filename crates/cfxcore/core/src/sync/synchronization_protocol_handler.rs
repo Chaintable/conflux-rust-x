@@ -90,9 +90,7 @@ const EPOCH_SYNC_MAX_RETRY_COUNT: u64 = 20;
 /// If not future epochs can be requested because of `EPOCH_SYNC_MAX_GAP`,
 /// after waiting this timeout we'll request from `best_epoch` again.
 const EPOCH_SYNC_RESTART_TIMEOUT_S: u64 = 60 * 10;
-const EPOCH_SYNC_MAX_INFLIGHT: u64 = 300;
 const EPOCH_SYNC_BATCH_SIZE: u64 = 30;
-const BLOCK_SYNC_MAX_INFLIGHT: usize = 1000;
 
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 pub enum SyncHandlerWorkType {
@@ -427,6 +425,11 @@ pub struct ProtocolConfiguration {
     pub check_status_genesis: bool,
 
     pub pos_started_as_voter: bool,
+
+    /// Max epochs whose block hashes are requested but not yet received.
+    pub sync_epoch_max_inflight: u64,
+    /// Max blocks whose bodies are requested but not yet received.
+    pub sync_block_max_inflight: usize,
 }
 
 impl SynchronizationProtocolHandler {
@@ -812,7 +815,9 @@ impl SynchronizationProtocolHandler {
             .copied()
             .collect();
         let n_blocks_to_request = min(
-            BLOCK_SYNC_MAX_INFLIGHT - in_flight_blocks.len(),
+            self.protocol_config
+                .sync_block_max_inflight
+                .saturating_sub(in_flight_blocks.len()),
             to_request_blocks.len(),
         );
 
@@ -876,8 +881,8 @@ impl SynchronizationProtocolHandler {
             }
         }
 
-        while self.request_manager.num_epochs_in_flight()
-            < EPOCH_SYNC_MAX_INFLIGHT
+        let max_inflight = self.protocol_config.sync_epoch_max_inflight;
+        while self.request_manager.num_epochs_in_flight() < max_inflight
             && latest_requested_epoch < my_best_epoch + sync_max_gap
             && (latest_requested_epoch < median_peer_epoch
                 || median_peer_epoch == 0)
@@ -918,7 +923,7 @@ impl SynchronizationProtocolHandler {
             }
 
             let until = {
-                let max_to_send = EPOCH_SYNC_MAX_INFLIGHT.saturating_sub(
+                let max_to_send = max_inflight.saturating_sub(
                     self.request_manager.num_epochs_in_flight(),
                 );
                 let maybe_peer_info = self.syn.get_peer_info(&peer.unwrap());
