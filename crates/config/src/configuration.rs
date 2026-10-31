@@ -2,7 +2,12 @@
 // Conflux is free software and distributed under GNU General Public License.
 // See http://www.gnu.org/licenses/
 
-use std::{collections::BTreeMap, convert::TryInto, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    convert::TryInto,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use cfx_rpc_builder::RpcModuleSelection;
 use lazy_static::*;
@@ -54,7 +59,7 @@ use diem_types::term_state::{
 };
 use jsonrpsee::server::ServerConfigBuilder;
 use metrics::MetricsConfiguration;
-use network::DiscoveryConfiguration;
+use network::{node_table::NodeId, DiscoveryConfiguration};
 use primitives::block_header::CIP112_TRANSITION_HEIGHT;
 use txgen::TransactionGeneratorConfig;
 
@@ -293,6 +298,10 @@ build_config! {
         (sync_epoch_max_inflight, (u64), 300)
         // Max blocks whose bodies are requested but not yet received.
         (sync_block_max_inflight, (usize), 1000)
+        // Comma separated node URLs, in the format of `bootnodes`. They are
+        // kept connected, and get most sync requests they can serve. Use for
+        // fast peers, e.g. a node in the same network that has the blocks.
+        (sync_preferred_peers, (Option<String>), None)
         (snapshot_chunk_request_timeout_ms, (u64), 30_000)
         (snapshot_manifest_request_timeout_ms, (u64), 30_000)
         (sync_expire_block_timeout_s, (u64), 7200)
@@ -553,6 +562,10 @@ impl Configuration {
         network_config.discovery_enabled = self.raw_conf.enable_discovery;
         network_config.boot_nodes = to_bootnodes(&self.raw_conf.bootnodes)
             .map_err(|e| format!("failed to parse bootnodes: {}", e))?;
+        network_config.reserved_nodes =
+            to_bootnodes(&self.raw_conf.sync_preferred_peers).map_err(|e| {
+                format!("failed to parse sync_preferred_peers: {}", e)
+            })?;
         network_config.config_path = Some(match &self.raw_conf.netconf_dir {
             Some(dir) => dir.clone(),
             None => Path::new(&self.raw_conf.conflux_data_dir)
@@ -995,7 +1008,28 @@ impl Configuration {
             pos_started_as_voter: self.raw_conf.pos_started_as_voter,
             sync_epoch_max_inflight: self.raw_conf.sync_epoch_max_inflight,
             sync_block_max_inflight: self.raw_conf.sync_block_max_inflight,
+            sync_preferred_peers: self.sync_preferred_peer_ids(),
         }
+    }
+
+    /// Node ids of `sync_preferred_peers`. The URLs are not resolved here,
+    /// `net_config` validates them.
+    fn sync_preferred_peer_ids(&self) -> HashSet<NodeId> {
+        let urls = match &self.raw_conf.sync_preferred_peers {
+            Some(urls) => urls,
+            None => return HashSet::new(),
+        };
+        urls.split(',')
+            .filter(|url| !url.is_empty())
+            .map(|url| {
+                url.strip_prefix("cfxnode://")
+                    .and_then(|s| s.split('@').next())
+                    .and_then(|id| id.parse().ok())
+                    .unwrap_or_else(|| {
+                        panic!("sync_preferred_peers: no node id in {}", url)
+                    })
+            })
+            .collect()
     }
 
     pub fn state_sync_config(&self) -> StateSyncConfiguration {

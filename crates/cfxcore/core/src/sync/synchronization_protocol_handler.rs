@@ -430,6 +430,8 @@ pub struct ProtocolConfiguration {
     pub sync_epoch_max_inflight: u64,
     /// Max blocks whose bodies are requested but not yet received.
     pub sync_block_max_inflight: usize,
+    /// Peers that get most sync requests, see `PeerFilter::select`.
+    pub sync_preferred_peers: HashSet<NodeId>,
 }
 
 impl SynchronizationProtocolHandler {
@@ -445,6 +447,7 @@ impl SynchronizationProtocolHandler {
             node_type,
             protocol_config.allow_phase_change_without_peer,
             protocol_config.min_phase_change_normal_peer_count,
+            protocol_config.sync_preferred_peers.clone(),
         ));
         let recover_public_queue = Arc::new(AsyncTaskQueue::new(
             SyncHandlerWorkType::RecoverPublic,
