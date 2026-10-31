@@ -20,6 +20,7 @@ use cfx_types::H256;
 use metrics::MeterTimer;
 use network::node_table::NodeId;
 use primitives::BlockHeader;
+use rayon::prelude::*;
 use rlp_derive::{RlpDecodable, RlpEncodable};
 use std::{
     collections::HashSet,
@@ -140,7 +141,38 @@ impl GetBlockHeadersResponse {
             .unwrap()
             .as_secs();
         let mut has_invalid_header = false;
-        for header in block_headers {
+
+        // The insertion below checks the proof of work while holding the
+        // phase manager lock and the sync graph lock, so it ran for one header
+        // at a time across all peers. Run the same header checks here first,
+        // in parallel and without the locks. The insertion then reuses the
+        // proof of work hash cached in the header. Duplicates are dropped, and
+        // the graph is read before the parallel part so the shared rayon
+        // workers take no lock.
+        let graph = &ctx.manager.graph;
+        let mut seen = HashSet::new();
+        let mut block_headers: Vec<BlockHeader> = block_headers
+            .iter()
+            .filter(|header| seen.insert(header.hash()))
+            .cloned()
+            .collect();
+        if !graph.is_consortium() {
+            let mut to_check: Vec<&mut BlockHeader> = block_headers
+                .iter_mut()
+                .filter(|header| {
+                    !graph.contains_block_header(&header.hash())
+                        && !graph.is_known_invalid_header(header)
+                })
+                .collect();
+            to_check.par_iter_mut().for_each(|header| {
+                // An invalid header fails again in the insertion.
+                let _ = graph
+                    .verification_config
+                    .verify_header_params(&graph.pow, header);
+            });
+        }
+
+        for header in &block_headers {
             let hash = header.hash();
             returned_headers.insert(hash);
             if ctx.manager.graph.contains_block_header(&hash) {

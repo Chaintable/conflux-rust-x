@@ -1398,6 +1398,14 @@ impl SynchronizationGraph {
             || self.future_blocks.contains(hash)
     }
 
+    /// Whether `insert_block_header` rejects `header` as invalid without
+    /// checking it, because it or one of its parent and referees is known to
+    /// be invalid.
+    pub fn is_known_invalid_header(&self, header: &BlockHeader) -> bool {
+        self.data_man.verified_invalid(&header.hash()).0
+            || self.parent_or_referees_invalid(header)
+    }
+
     fn parent_or_referees_invalid(&self, header: &BlockHeader) -> bool {
         self.data_man.verified_invalid(header.parent_hash()).0
             || header
