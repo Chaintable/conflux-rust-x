@@ -28,6 +28,12 @@ use rustc_hex::FromHex;
 
 const DEFAULT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 
+/// Longer code is analysed on every call instead of being cached. Deployed
+/// code is at most 48 KiB, so this only skips large init code and code given
+/// through RPC overrides. Inserting huge code would evict many entries while
+/// holding the lock that block execution also takes.
+const MAX_CACHED_CODE_LEN: usize = 64 * 1024;
+
 /// Stub for a sharing `BitSet` data in cache (reference counted)
 /// and implementing MallocSizeOf on it.
 #[derive(Clone)]
@@ -70,7 +76,7 @@ impl<const CANCUN: bool> SharedCache<CANCUN> {
     pub fn jump_and_sub_destinations(
         &self, code_hash: &H256, code: &[u8],
     ) -> (Arc<BitSet>, Arc<BitSet>) {
-        if code_hash == &KECCAK_EMPTY {
+        if code_hash == &KECCAK_EMPTY || code.len() > MAX_CACHED_CODE_LEN {
             let cache_item = Self::find_jump_and_sub_destinations(code);
             return (
                 cache_item.jump_destination.0,
