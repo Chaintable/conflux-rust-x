@@ -156,7 +156,9 @@ impl GetBlockHeadersResponse {
             .filter(|header| seen.insert(header.hash()))
             .cloned()
             .collect();
-        if !graph.is_consortium() {
+        // While the graph is locked for catch-up the insertion skips headers,
+        // so do not check them either.
+        if !graph.is_consortium() && !graph.is_locked_for_catchup() {
             let mut to_check: Vec<&mut BlockHeader> = block_headers
                 .iter_mut()
                 .filter(|header| {

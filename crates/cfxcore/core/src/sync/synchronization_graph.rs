@@ -1398,6 +1398,12 @@ impl SynchronizationGraph {
             || self.future_blocks.contains(hash)
     }
 
+    /// Whether `insert_block_header` skips headers while the graph is locked
+    /// for downloading block bodies.
+    pub fn is_locked_for_catchup(&self) -> bool {
+        self.inner.read().locked_for_catchup
+    }
+
     /// Whether `insert_block_header` rejects `header` as invalid without
     /// checking it, because it or one of its parent and referees is known to
     /// be invalid.
