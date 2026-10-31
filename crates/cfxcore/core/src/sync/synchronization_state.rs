@@ -17,13 +17,21 @@ use network::{
     node_table::NodeId, service::ProtocolVersion, Error as NetworkError,
 };
 use parking_lot::RwLock;
-use rand::prelude::{IndexedRandom, SliceRandom};
+use rand::{
+    prelude::{IndexedRandom, SliceRandom},
+    Rng,
+};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
 use throttling::token_bucket::{ThrottledManager, TokenBucketManager};
+
+/// Share of `PeerFilter::select` picks that go to a matching preferred peer.
+/// The rest stay random, so a request that a preferred peer cannot serve,
+/// e.g. it lacks a block, still reaches other peers when retried.
+const PREFERRED_PEER_SHARE: f64 = 0.9;
 
 #[derive(DeriveMallocSizeOf)]
 pub struct SynchronizationPeerState {
@@ -96,6 +104,8 @@ pub struct SynchronizationState {
     pub peers: RwLock<SynchronizationPeers>,
     pub handshaking_peers: RwLock<HashMap<NodeId, (ProtocolVersion, Instant)>>,
     pub last_sent_transaction_hashes: RwLock<HashSet<H256>>,
+    /// Peers that `PeerFilter::select` picks whenever one of them matches.
+    preferred_peers: HashSet<NodeId>,
 }
 
 impl SynchronizationState {
@@ -103,12 +113,14 @@ impl SynchronizationState {
         is_consortium: bool, node_type: NodeType,
         allow_phase_change_without_peer: bool,
         min_phase_change_normal_peer_count: usize,
+        preferred_peers: HashSet<NodeId>,
     ) -> Self {
         SynchronizationState {
             is_consortium,
             node_type,
             allow_phase_change_without_peer,
             min_phase_change_normal_peer_count,
+            preferred_peers,
             peers: Default::default(),
             handshaking_peers: Default::default(),
             last_sent_transaction_hashes: Default::default(),
@@ -381,8 +393,23 @@ impl<'a> PeerFilter<'a> {
         peers
     }
 
+    /// A random matching peer. With `PREFERRED_PEER_SHARE` probability it
+    /// is a preferred peer if one matches.
     pub fn select(self, syn: &SynchronizationState) -> Option<NodeId> {
-        self.select_all(syn).choose(&mut random::new()).cloned()
+        let peers = self.select_all(syn);
+        let mut rng = random::new();
+        if !syn.preferred_peers.is_empty()
+            && rng.random_bool(PREFERRED_PEER_SHARE)
+        {
+            let preferred: Vec<&NodeId> = peers
+                .iter()
+                .filter(|id| syn.preferred_peers.contains(id))
+                .collect();
+            if let Some(id) = preferred.choose(&mut rng) {
+                return Some(**id);
+            }
+        }
+        peers.choose(&mut rng).cloned()
     }
 
     pub fn select_n(self, n: usize, syn: &SynchronizationState) -> Vec<NodeId> {
