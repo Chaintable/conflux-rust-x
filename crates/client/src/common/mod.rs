@@ -72,6 +72,13 @@ use cfxcore::consensus::pos_handler::read_initial_nodes_from_file;
 pub mod panic_handler;
 pub mod shutdown_handler;
 
+/// Budget of each EVM jump destination cache (pre-Cancun and Cancun) shared
+/// by all executions. The cache counts 8 bytes per bitmap bit, 64 times the
+/// bitmap memory, so this keeps about 170 contracts of 24 KiB code in about
+/// 1 MiB. Many tiny contracts take up to about 30 MiB per cache because of
+/// per-entry overhead.
+const EVM_JUMP_CACHE_SIZE: usize = 64 * 1024 * 1024;
+
 /// Hold all top-level components for a type of client.
 /// This struct implement ClientShutdownTrait.
 pub struct ClientComponents<BlockGenT, Rest> {
@@ -317,7 +324,10 @@ pub fn initialize_common_modules(
     };
 
     let consensus_conf = conf.consensus_config();
-    let vm = VmFactory::new(1024 * 32);
+    // Jump destinations are cached by code hash. With a 32 KiB budget no
+    // contract over 2 KiB stayed cached, so its code was scanned again on
+    // every call.
+    let vm = VmFactory::new(EVM_JUMP_CACHE_SIZE);
     let machine = Arc::new(Machine::new_with_builtin(conf.common_params(), vm));
 
     let genesis_block = genesis_block(
