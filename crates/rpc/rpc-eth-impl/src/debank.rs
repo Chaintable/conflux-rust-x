@@ -84,7 +84,12 @@ pub fn build_debank_output(
             Space::Ethereum => {
                 eth_traces.entry(raw.tx_hash).or_insert(root);
             }
-            Space::Native => collect_phantom_slots(&root, &mut phantom_slots),
+            // A failed Core space transaction emits no phantom transaction,
+            // as in `build_phantom_block`, even if all its calls returned.
+            Space::Native if raw.success => {
+                collect_phantom_slots(&root, &mut phantom_slots)
+            }
+            Space::Native => {}
         }
     }
 

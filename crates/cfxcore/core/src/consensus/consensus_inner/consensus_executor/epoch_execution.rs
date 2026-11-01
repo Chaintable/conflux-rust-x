@@ -9,8 +9,9 @@ use pow_types::StakingEvent;
 use cfx_statedb::{Error as DbErrorKind, Result as DbResult};
 use cfx_types::{AddressSpaceUtil, Space, SpaceMap, H256, U256};
 use primitives::{
-    receipt::BlockReceipts, AccessListItem, Action, Block, BlockHeader,
-    BlockNumber, Receipt, SignedTransaction, TransactionIndex,
+    receipt::{BlockReceipts, TransactionStatus},
+    AccessListItem, Action, Block, BlockHeader, BlockNumber, Receipt,
+    SignedTransaction, TransactionIndex,
 };
 
 use crate::{
@@ -52,6 +53,10 @@ pub struct GethTask<'a> {
 pub struct DebankTxRawTrace {
     pub tx_hash: H256,
     pub space: Space,
+    /// Whether the transaction succeeded. A transaction can fail after all
+    /// its calls returned, e.g. with `ExceedStorageLimit`, so the call tree
+    /// alone does not tell.
+    pub success: bool,
     pub trace: DebankTxTrace,
 }
 
@@ -687,6 +692,7 @@ impl BlockProcessRecorder {
         }
 
         let not_skipped = !r.receipt.tx_skipped();
+        let success = r.receipt.outcome_status == TransactionStatus::Success;
 
         if executive_trace {
             self.traces.push(r.tx_traces.into());
@@ -708,6 +714,7 @@ impl BlockProcessRecorder {
             self.debank_raw_traces.push(DebankTxRawTrace {
                 tx_hash: tx.hash(),
                 space: tx.space(),
+                success,
                 trace,
             });
         }
