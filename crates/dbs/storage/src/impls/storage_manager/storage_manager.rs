@@ -980,6 +980,9 @@ impl StorageManager {
         let mut old_pivot_snapshot_infos_to_remove = vec![];
         let mut find_nearest_multiple_of = false;
         let mut in_progress_snapshot_to_cancel = vec![];
+        let snapshot_db_manager =
+            self.snapshot_manager.get_snapshot_db_manager();
+        let mut latest_mpt_rewind_keeper = LatestMptRewindKeeper::new();
 
         {
             let current_snapshots = self.current_snapshots.read();
@@ -995,6 +998,14 @@ impl StorageManager {
                     if snapshot_epoch_id
                         .eq(&maintained_state_root.aux_info.snapshot_epoch_id)
                     {
+                        // Not removed here, but a rewind may start from its
+                        // MPT backup, then the older ones are not needed.
+                        latest_mpt_rewind_keeper.keep(
+                            snapshot_db_manager.latest_mpt_rewind_use(
+                                snapshot_epoch_id,
+                                snapshot_info.height,
+                            ),
+                        );
                         prev_snapshot_epoch_id =
                             &snapshot_info.parent_snapshot_epoch_id;
                     } else {
@@ -1004,6 +1015,13 @@ impl StorageManager {
                 } else if snapshot_info.height < confirmed_snapshot_height {
                     // We remove for older pivot snapshot one after another.
                     if snapshot_epoch_id.eq(prev_snapshot_epoch_id) {
+                        let keep_for_latest_mpt_rewind =
+                            latest_mpt_rewind_keeper.keep(
+                                snapshot_db_manager.latest_mpt_rewind_use(
+                                    snapshot_epoch_id,
+                                    snapshot_info.height,
+                                ),
+                            );
                         if extra_snapshots_to_keep(
                             snapshot_info.height,
                             &mut find_nearest_multiple_of,
@@ -1020,6 +1038,16 @@ impl StorageManager {
                             }
                             extra_snapshot_infos_kept_for_sync
                                 .push((snapshot_epoch_id.clone(), SnapshotKeptToProvideSyncStatus::InfoAndSnapshot));
+                        } else if keep_for_latest_mpt_rewind {
+                            // A pivot switch above the confirmed snapshot
+                            // rebuilds the latest MPT from the closest MPT
+                            // backup and the delta dumps after it, so keep
+                            // them with their infos until a newer backup on
+                            // the pivot chain is confirmed.
+                            debug!(
+                                "keep snapshot {:?} at {} for latest MPT rewind",
+                                snapshot_epoch_id, snapshot_info.height
+                            );
                         } else {
                             // Retain the snapshot information for the one
                             // preceding the stable checkpoint
@@ -1535,6 +1563,34 @@ fn extra_snapshots_to_keep_predicate(
     false
 }
 
+/// Walks the pivot snapshots from the confirmed snapshot downwards and tells
+/// which of them a rewind of the latest MPT may still read: every snapshot
+/// down to and including the first one with an MPT backup.
+struct LatestMptRewindKeeper {
+    searching: bool,
+}
+
+impl LatestMptRewindKeeper {
+    fn new() -> Self { Self { searching: true } }
+
+    fn keep(&mut self, rewind_use: LatestMptRewindUse) -> bool {
+        if !self.searching {
+            return false;
+        }
+        match rewind_use {
+            LatestMptRewindUse::None => {
+                self.searching = false;
+                false
+            }
+            LatestMptRewindUse::Replay => true,
+            LatestMptRewindUse::Backup => {
+                self.searching = false;
+                true
+            }
+        }
+    }
+}
+
 struct MaybeDeltaTrieDestroyErrors {
     delta_trie_destroy_error_1: Cell<Option<Error>>,
     delta_trie_destroy_error_2: Cell<Option<Error>>,
@@ -1600,8 +1656,8 @@ use crate::{
     },
     snapshot_manager::SnapshotManagerTrait,
     storage_db::{
-        DeltaDbManagerTrait, KeyValueDbIterableTrait, SnapshotDbManagerTrait,
-        SnapshotInfo, SnapshotKeptToProvideSyncStatus,
+        DeltaDbManagerTrait, KeyValueDbIterableTrait, LatestMptRewindUse,
+        SnapshotDbManagerTrait, SnapshotInfo, SnapshotKeptToProvideSyncStatus,
     },
     storage_dir,
     utils::guarded_value::GuardedValue,
@@ -1628,3 +1684,36 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{LatestMptRewindKeeper, LatestMptRewindUse};
+    use LatestMptRewindUse::*;
+
+    fn kept(uses: &[LatestMptRewindUse]) -> Vec<bool> {
+        let mut keeper = LatestMptRewindKeeper::new();
+        uses.iter().map(|u| keeper.keep(*u)).collect()
+    }
+
+    #[test]
+    fn keeps_snapshots_down_to_closest_mpt_backup() {
+        // Mainnet epoch 64468000: confirmed 64464000, backup at 64460000.
+        // 64462000 was removed, so the rewind for a pivot switch at
+        // 64468000 failed with SnapshotNotFound.
+        assert_eq!(
+            kept(&[Replay, Replay, Backup, Replay, Replay, Backup]),
+            vec![true, true, true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn confirmed_snapshot_with_backup_keeps_nothing_older() {
+        assert_eq!(kept(&[Backup, Replay, Backup]), vec![true, false, false]);
+    }
+
+    #[test]
+    fn stops_where_mpt_is_not_isolated() {
+        assert_eq!(kept(&[Replay, None, Replay]), vec![true, false, false]);
+        assert_eq!(kept(&[None, Replay, Backup]), vec![false, false, false]);
+    }
+}

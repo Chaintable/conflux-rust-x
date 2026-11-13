@@ -12,6 +12,20 @@ pub struct SnapshotPersistState {
     pub max_snapshot_epoch_height_has_mpt: Option<u64>,
 }
 
+/// How a rewind of the latest MPT uses a snapshot on its branch. The rewind
+/// copies the closest MPT backup on the branch and replays the delta dumps
+/// of the snapshots after it, so these snapshots must not be removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LatestMptRewindUse {
+    /// The rewind never reads the snapshot, e.g. its MPT is not kept in the
+    /// isolated MPT database, or MPT backups are disabled.
+    None,
+    /// The rewind replays the delta dump of the snapshot.
+    Replay,
+    /// The rewind starts from the MPT backup of the snapshot.
+    Backup,
+}
+
 pub trait SnapshotDbWriteableTrait: KeyValueDbTypes {
     type SnapshotDbBorrowMutType: SnapshotMptTraitRw;
 
@@ -54,6 +68,14 @@ pub trait SnapshotDbManagerTrait {
     fn try_get_new_snapshot_epoch_from_mpt_temp_path(
         &self, dir_name: &str,
     ) -> Option<EpochId>;
+
+    /// How a rewind of the latest MPT that passes through the snapshot at
+    /// `height` uses it.
+    fn latest_mpt_rewind_use(
+        &self, _snapshot_epoch_id: &EpochId, _height: u64,
+    ) -> LatestMptRewindUse {
+        LatestMptRewindUse::None
+    }
 
     // Scan snapshot dir, remove extra files and return the list of missing
     // snapshots.
