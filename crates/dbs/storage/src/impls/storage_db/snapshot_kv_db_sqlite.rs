@@ -575,6 +575,32 @@ impl SnapshotKvDbSqlite {
         Ok(root)
     }
 
+    /// Builds the MPT of this snapshot from all its key-values into `mpt_db`,
+    /// which must be empty, and returns the root.
+    pub fn build_mpt_from_kv(
+        &self, mpt_db: &mut SnapshotMptDbSqlite,
+    ) -> Result<MerkleHash> {
+        info!("build mpt from kv snapshot begins");
+        let mut kv_iter = self.snapshot_kv_iterator()?.take();
+
+        mpt_db.start_transaction()?;
+        let mut mpt = mpt_db.open_snapshot_mpt_owned()?;
+        let mut mpt_merger =
+            MptMerger::new(None, &mut mpt as &mut dyn SnapshotMptTraitRw);
+        let root = mpt_merger.merge_insertion_deletion_separated(
+            fallible_iterator::convert(
+                std::iter::empty::<Result<(Vec<u8>, ())>>(),
+            ),
+            kv_iter.iter_range(&[], None)?.take(),
+            false,
+        )?;
+        drop(mpt_merger);
+        drop(mpt);
+        mpt_db.commit_transaction()?;
+        info!("build mpt from kv snapshot finished, root {:?}", root);
+        Ok(root)
+    }
+
     // FIXME: add rate limit.
     // FIXME: how to handle row_id, this should go to the merkle tree?
     pub fn dump_delta_mpt(
@@ -809,3 +835,117 @@ use tokio::sync::Semaphore;
 use super::snapshot_mpt_db_sqlite::{
     SnapshotMptDbSqlite, SNAPSHOT_MPT_DB_STATEMENTS,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keccak_hash::keccak;
+    use primitives::MERKLE_NULL_NODE;
+
+    fn merge_into_mpt(
+        mpt_db: &mut SnapshotMptDbSqlite, deletes: &[&[u8]],
+        sets: &[(&[u8], &[u8])],
+    ) -> MerkleHash {
+        let deletes: Vec<Result<(Vec<u8>, ())>> =
+            deletes.iter().map(|k| Ok((k.to_vec(), ()))).collect();
+        let sets: Vec<Result<MptKeyValue>> = sets
+            .iter()
+            .map(|(k, v)| Ok((k.to_vec(), v.to_vec().into_boxed_slice())))
+            .collect();
+        mpt_db.start_transaction().unwrap();
+        let mut mpt = mpt_db.open_snapshot_mpt_owned().unwrap();
+        let root =
+            MptMerger::new(None, &mut mpt as &mut dyn SnapshotMptTraitRw)
+                .merge_insertion_deletion_separated(
+                    fallible_iterator::convert(deletes.into_iter()),
+                    fallible_iterator::convert(sets.into_iter()),
+                    false,
+                )
+                .unwrap();
+        drop(mpt);
+        mpt_db.commit_transaction().unwrap();
+        root
+    }
+
+    #[test]
+    fn build_mpt_from_kv_matches_incremental_merges() {
+        let dir = std::env::temp_dir()
+            .join(format!("cfx_build_mpt_from_kv_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let semaphore = Arc::new(Semaphore::new(16));
+
+        let keys: Vec<Vec<u8>> = (0u32..300)
+            .map(|i| {
+                let mut k = keccak(i.to_be_bytes()).as_bytes().to_vec();
+                k.truncate(4 + (i % 29) as usize);
+                k
+            })
+            .collect();
+        let mut first: Vec<(&[u8], Vec<u8>)> = keys
+            .iter()
+            .map(|k| (k.as_slice(), [k.as_slice(), b"v1"].concat()))
+            .collect();
+        first.sort();
+        first.dedup_by(|a, b| a.0 == b.0);
+
+        // The latest MPT after two snapshots: the first one sets all keys,
+        // the second one deletes some keys and updates others.
+        let mut incremental = SnapshotMptDbSqlite::create(
+            &dir.join("incremental"),
+            &Default::default(),
+            &semaphore,
+            None,
+        )
+        .unwrap();
+        let first_sets: Vec<(&[u8], &[u8])> =
+            first.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+        merge_into_mpt(&mut incremental, &[], &first_sets);
+
+        let deletes: Vec<&[u8]> =
+            first.iter().step_by(7).map(|(k, _)| *k).collect();
+        let updates: Vec<(&[u8], Vec<u8>)> = first
+            .iter()
+            .skip(3)
+            .step_by(5)
+            .filter(|(k, _)| !deletes.contains(k))
+            .map(|(k, _)| (*k, [*k, b"v2"].concat()))
+            .collect();
+        let update_sets: Vec<(&[u8], &[u8])> =
+            updates.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+        let expected = merge_into_mpt(&mut incremental, &deletes, &update_sets);
+        assert_ne!(expected, MERKLE_NULL_NODE);
+
+        // The kv snapshot holds the final key-values.
+        let mut kv_db = SnapshotKvDbSqlite::create(
+            &dir.join("kv"),
+            &Default::default(),
+            &semaphore,
+            /* mpt_table_in_current_db = */ false,
+        )
+        .unwrap();
+        kv_db.start_transaction().unwrap();
+        for (k, v) in &first {
+            if deletes.contains(k) {
+                continue;
+            }
+            let v = updates
+                .iter()
+                .find(|(uk, _)| uk == k)
+                .map_or(v.as_slice(), |(_, uv)| uv.as_slice());
+            kv_db.put(k, v).unwrap();
+        }
+        kv_db.commit_transaction().unwrap();
+
+        let mut rebuilt = SnapshotMptDbSqlite::create(
+            &dir.join("rebuilt"),
+            &Default::default(),
+            &semaphore,
+            None,
+        )
+        .unwrap();
+        assert_eq!(kv_db.build_mpt_from_kv(&mut rebuilt).unwrap(), expected);
+
+        drop((incremental, rebuilt, kv_db));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
